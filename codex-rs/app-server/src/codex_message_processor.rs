@@ -368,6 +368,7 @@ struct ThreadListFilters {
 const LOGIN_CHATGPT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const LOGIN_ISSUER_OVERRIDE_ENV_VAR: &str = "CODEX_APP_SERVER_LOGIN_ISSUER";
 const APP_LIST_LOAD_TIMEOUT: Duration = Duration::from_secs(90);
+const ACCOUNT_METADATA_FETCH_TIMEOUT: Duration = Duration::from_secs(2);
 
 enum ActiveLogin {
     Browser {
@@ -1679,14 +1680,119 @@ impl CodexMessageProcessor {
         let account = match self.auth_manager.auth_cached() {
             Some(auth) => match auth.auth_mode() {
                 CoreAuthMode::ApiKey => Some(Account::ApiKey {}),
-                CoreAuthMode::Chatgpt | CoreAuthMode::ChatgptAuthTokens => {
+                CoreAuthMode::Chatgpt => {
                     let email = auth.get_account_email();
                     let plan_type = auth.account_plan_type();
+                    let account_id = auth.get_account_id();
+                    let chatgpt_user_id = auth.get_chatgpt_user_id();
 
                     match (email, plan_type) {
                         (Some(email), Some(plan_type)) => {
-                            Some(Account::Chatgpt { email, plan_type })
+                            let (account_display_name, account_group_names) = if auth
+                                .is_external_chatgpt_tokens()
+                            {
+                                (None, None)
+                            } else {
+                                match BackendClient::from_auth(
+                                    self.config.chatgpt_base_url.clone(),
+                                    &auth,
+                                ) {
+                                    Ok(client) => {
+                                        let account_display_name = match tokio::time::timeout(
+                                            ACCOUNT_METADATA_FETCH_TIMEOUT,
+                                            client.get_current_account_display_name(),
+                                        )
+                                        .await
+                                        {
+                                            Ok(Ok(name)) => name,
+                                            Ok(Err(err)) => {
+                                                tracing::debug!(
+                                                    "failed to fetch ChatGPT account display name: {err}"
+                                                );
+                                                None
+                                            }
+                                            Err(err) => {
+                                                tracing::debug!(
+                                                    "timed out fetching ChatGPT account display name: {err}"
+                                                );
+                                                None
+                                            }
+                                        };
+                                        let account_group_names = match (
+                                            account_id.as_deref(),
+                                            chatgpt_user_id.as_deref(),
+                                        ) {
+                                            (Some(account_id), Some(chatgpt_user_id)) => {
+                                                match tokio::time::timeout(
+                                                    ACCOUNT_METADATA_FETCH_TIMEOUT,
+                                                    client.get_current_account_group_names(
+                                                        account_id,
+                                                        chatgpt_user_id,
+                                                    ),
+                                                )
+                                                .await
+                                                {
+                                                    Ok(Ok(names)) => names,
+                                                    Ok(Err(err)) => {
+                                                        tracing::debug!(
+                                                            "failed to fetch ChatGPT account groups: {err}"
+                                                        );
+                                                        None
+                                                    }
+                                                    Err(err) => {
+                                                        tracing::debug!(
+                                                            "timed out fetching ChatGPT account groups: {err}"
+                                                        );
+                                                        None
+                                                    }
+                                                }
+                                            }
+                                            _ => None,
+                                        };
+                                        (account_display_name, account_group_names)
+                                    }
+                                    Err(err) => {
+                                        tracing::debug!(
+                                            "failed to create ChatGPT backend client for account display name: {err}"
+                                        );
+                                        (None, None)
+                                    }
+                                }
+                            };
+                            Some(Account::Chatgpt {
+                                email,
+                                plan_type,
+                                account_id,
+                                account_display_name,
+                                account_group_names,
+                            })
                         }
+                        _ => {
+                            let error = JSONRPCErrorError {
+                                code: INVALID_REQUEST_ERROR_CODE,
+                                message:
+                                    "email and plan type are required for chatgpt authentication"
+                                        .to_string(),
+                                data: None,
+                            };
+                            self.outgoing.send_error(request_id, error).await;
+                            return;
+                        }
+                    }
+                }
+                CoreAuthMode::ChatgptAuthTokens => {
+                    let email = auth.get_account_email();
+                    let plan_type = auth.account_plan_type();
+                    let account_id = auth.get_account_id();
+
+                    match (email, plan_type) {
+                        (Some(email), Some(plan_type)) => Some(Account::Chatgpt {
+                            email,
+                            plan_type,
+                            account_id,
+                            account_display_name: None,
+                            account_group_names: None,
+                        }),
                         _ => {
                             let error = JSONRPCErrorError {
                                 code: INVALID_REQUEST_ERROR_CODE,

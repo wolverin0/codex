@@ -230,7 +230,13 @@ impl AppServerSession {
                 FeedbackAudience::External,
                 false,
             ),
-            Some(Account::Chatgpt { email, plan_type }) => {
+            Some(Account::Chatgpt {
+                email,
+                plan_type,
+                account_display_name,
+                account_group_names,
+                ..
+            }) => {
                 let feedback_audience = if email.ends_with("@openai.com") {
                     FeedbackAudience::OpenAiEmployee
                 } else {
@@ -242,6 +248,8 @@ impl AppServerSession {
                     Some(StatusAccountDisplay::ChatGpt {
                         email: Some(email),
                         plan: Some(plan_type_display_name(plan_type)),
+                        account_display_name,
+                        account_group_names,
                     }),
                     Some(plan_type),
                     feedback_audience,
@@ -771,6 +779,8 @@ pub(crate) fn status_account_display_from_auth_mode(
             Some(StatusAccountDisplay::ChatGpt {
                 email: None,
                 plan: plan_type.map(plan_type_display_name),
+                account_display_name: None,
+                account_group_names: None,
             })
         }
         None => None,
@@ -1427,6 +1437,7 @@ mod tests {
             Some(StatusAccountDisplay::ChatGpt {
                 email: None,
                 plan: Some(ref plan),
+                ..
             }) if plan == "Enterprise"
         ));
 
@@ -1439,6 +1450,7 @@ mod tests {
             Some(StatusAccountDisplay::ChatGpt {
                 email: None,
                 plan: Some(ref plan),
+                ..
             }) if plan == "Business"
         ));
     }

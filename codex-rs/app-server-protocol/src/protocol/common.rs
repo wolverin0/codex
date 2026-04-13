@@ -1611,12 +1611,18 @@ mod tests {
         let chatgpt = v2::Account::Chatgpt {
             email: "user@example.com".to_string(),
             plan_type: PlanType::Plus,
+            account_id: Some("acct_123".to_string()),
+            account_display_name: Some("Acme Corp".to_string()),
+            account_group_names: Some(vec!["Engineering".to_string(), "Design".to_string()]),
         };
         assert_eq!(
             json!({
                 "type": "chatgpt",
                 "email": "user@example.com",
                 "planType": "plus",
+                "accountId": "acct_123",
+                "accountDisplayName": "Acme Corp",
+                "accountGroupNames": ["Engineering", "Design"],
             }),
             serde_json::to_value(&chatgpt)?,
         );

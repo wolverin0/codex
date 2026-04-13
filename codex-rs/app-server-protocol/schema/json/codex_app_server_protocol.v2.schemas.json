@@ -25,6 +25,27 @@
         },
         {
           "properties": {
+            "accountDisplayName": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "accountGroupNames": {
+              "items": {
+                "type": "string"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "accountId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "email": {
               "type": "string"
             },

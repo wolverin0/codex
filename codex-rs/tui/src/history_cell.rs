@@ -25,12 +25,14 @@ use crate::legacy_core::config::Config;
 #[cfg(test)]
 use crate::legacy_core::plugins::PluginsManager;
 use crate::legacy_core::web_search_detail;
+use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
 use crate::live_wrap::take_prefix_by_width;
 use crate::markdown::append_markdown;
 use crate::render::line_utils::line_to_static;
 use crate::render::line_utils::prefix_lines;
 use crate::render::line_utils::push_owned_lines;
 use crate::render::renderable::Renderable;
+use crate::status::StatusAccountDisplay;
 use crate::style::proposed_plan_style;
 use crate::style::user_message_style;
 #[cfg(test)]
@@ -1150,6 +1152,7 @@ pub(crate) fn new_session_info(
     event: SessionConfiguredEvent,
     is_first_event: bool,
     tooltip_override: Option<String>,
+    account_display: Option<&StatusAccountDisplay>,
     auth_plan: Option<PlanType>,
     show_fast_status: bool,
 ) -> SessionInfoCell {
@@ -1164,6 +1167,7 @@ pub(crate) fn new_session_info(
         reasoning_effort,
         show_fast_status,
         config.cwd.to_path_buf(),
+        account_display.cloned(),
         CODEX_CLI_VERSION,
     );
     let mut parts: Vec<Box<dyn HistoryCell>> = vec![Box::new(header)];
@@ -1251,6 +1255,7 @@ pub(crate) struct SessionHeaderHistoryCell {
     reasoning_effort: Option<ReasoningEffortConfig>,
     show_fast_status: bool,
     directory: PathBuf,
+    account_display: Option<StatusAccountDisplay>,
 }
 
 impl SessionHeaderHistoryCell {
@@ -1259,6 +1264,7 @@ impl SessionHeaderHistoryCell {
         reasoning_effort: Option<ReasoningEffortConfig>,
         show_fast_status: bool,
         directory: PathBuf,
+        account_display: Option<StatusAccountDisplay>,
         version: &'static str,
     ) -> Self {
         Self::new_with_style(
@@ -1267,6 +1273,7 @@ impl SessionHeaderHistoryCell {
             reasoning_effort,
             show_fast_status,
             directory,
+            account_display,
             version,
         )
     }
@@ -1277,6 +1284,7 @@ impl SessionHeaderHistoryCell {
         reasoning_effort: Option<ReasoningEffortConfig>,
         show_fast_status: bool,
         directory: PathBuf,
+        account_display: Option<StatusAccountDisplay>,
         version: &'static str,
     ) -> Self {
         Self {
@@ -1286,6 +1294,7 @@ impl SessionHeaderHistoryCell {
             reasoning_effort,
             show_fast_status,
             directory,
+            account_display,
         }
     }
 
@@ -1334,8 +1343,6 @@ impl HistoryCell for SessionHeaderHistoryCell {
             return Vec::new();
         };
 
-        let make_row = |spans: Vec<Span<'static>>| Line::from(spans);
-
         // Title line rendered inside the box: ">_ OpenAI Codex (vX)"
         let title_spans: Vec<Span<'static>> = vec![
             Span::from(">_ ").dim(),
@@ -1346,12 +1353,46 @@ impl HistoryCell for SessionHeaderHistoryCell {
 
         const CHANGE_MODEL_HINT_COMMAND: &str = "/model";
         const CHANGE_MODEL_HINT_EXPLANATION: &str = " to change";
+        const ACCOUNT_LABEL: &str = "account:";
         const DIR_LABEL: &str = "directory:";
-        let label_width = DIR_LABEL.len();
+        const GROUPS_LABEL: &str = "groups:";
+        const MODEL_LABEL: &str = "model:";
+        const ORGANIZATION_LABEL: &str = "organization:";
+        let has_account = self.account_display.is_some();
+        let has_organization = matches!(
+            self.account_display.as_ref(),
+            Some(StatusAccountDisplay::ChatGpt {
+                account_display_name: Some(_),
+                ..
+            })
+        );
+        let has_groups = matches!(
+            self.account_display.as_ref(),
+            Some(StatusAccountDisplay::ChatGpt {
+                account_group_names: Some(account_group_names),
+                ..
+            }) if !account_group_names.is_empty()
+        );
+        let mut label_width = [DIR_LABEL.len(), MODEL_LABEL.len()]
+            .into_iter()
+            .max()
+            .unwrap_or(0);
+        if has_account {
+            label_width = label_width.max(ACCOUNT_LABEL.len());
+        }
+        if has_organization {
+            label_width = label_width.max(ORGANIZATION_LABEL.len());
+        }
+        if has_groups {
+            label_width = label_width.max(GROUPS_LABEL.len());
+        }
+        let make_row = |spans: Vec<Span<'static>>| {
+            truncate_line_with_ellipsis_if_overflow(Line::from(spans), inner_width)
+        };
 
         let model_label = format!(
             "{model_label:<label_width$}",
-            model_label = "model:",
+            model_label = MODEL_LABEL,
             label_width = label_width
         );
         let reasoning_label = self.reasoning_label();
@@ -1381,12 +1422,53 @@ impl HistoryCell for SessionHeaderHistoryCell {
         let dir = self.format_directory(Some(dir_max_width));
         let dir_spans = vec![Span::from(dir_prefix).dim(), Span::from(dir)];
 
-        let lines = vec![
+        let mut lines = vec![
             make_row(title_spans),
             make_row(Vec::new()),
             make_row(model_spans),
             make_row(dir_spans),
         ];
+        if let Some(account_display) = self.account_display.as_ref() {
+            let account_label = format!("{ACCOUNT_LABEL:<label_width$}");
+            let account_value = match account_display {
+                StatusAccountDisplay::ChatGpt { email, plan, .. } => match (email, plan) {
+                    (Some(email), Some(plan)) => format!("{email} ({plan})"),
+                    (Some(email), None) => email.clone(),
+                    (None, Some(plan)) => plan.clone(),
+                    (None, None) => "ChatGPT".to_string(),
+                },
+                StatusAccountDisplay::ApiKey => {
+                    "API key configured (run codex login to use ChatGPT)".to_string()
+                }
+            };
+            lines.push(make_row(vec![
+                Span::from(format!("{account_label} ")).dim(),
+                Span::from(account_value),
+            ]));
+            if let StatusAccountDisplay::ChatGpt {
+                account_display_name: Some(account_display_name),
+                ..
+            } = account_display
+            {
+                let organization_label = format!("{ORGANIZATION_LABEL:<label_width$}");
+                lines.push(make_row(vec![
+                    Span::from(format!("{organization_label} ")).dim(),
+                    Span::from(account_display_name.clone()),
+                ]));
+            }
+            if let StatusAccountDisplay::ChatGpt {
+                account_group_names: Some(account_group_names),
+                ..
+            } = account_display
+                && !account_group_names.is_empty()
+            {
+                let groups_label = format!("{GROUPS_LABEL:<label_width$}");
+                lines.push(make_row(vec![
+                    Span::from(format!("{groups_label} ")).dim(),
+                    Span::from(account_group_names.join(", ")),
+                ]));
+            }
+        }
 
         with_border(lines)
     }
@@ -3093,6 +3175,7 @@ mod tests {
             session_configured_event("gpt-5"),
             /*is_first_event*/ false,
             Some("Model just became available".to_string()),
+            /*account_display*/ None,
             Some(PlanType::Free),
             /*show_fast_status*/ false,
         );
@@ -3115,6 +3198,7 @@ mod tests {
             session_configured_event("gpt-5"),
             /*is_first_event*/ false,
             Some("Model just became available".to_string()),
+            /*account_display*/ None,
             Some(PlanType::Free),
             /*show_fast_status*/ false,
         );
@@ -3132,6 +3216,7 @@ mod tests {
             session_configured_event("gpt-5"),
             /*is_first_event*/ true,
             Some("Model just became available".to_string()),
+            /*account_display*/ None,
             Some(PlanType::Free),
             /*show_fast_status*/ false,
         );
@@ -3139,6 +3224,64 @@ mod tests {
         let rendered = render_transcript(&cell).join("\n");
         assert!(!rendered.contains("Model just became available"));
         assert!(rendered.contains("To get started"));
+    }
+
+    #[tokio::test]
+    #[cfg_attr(
+        target_os = "windows",
+        ignore = "snapshot path rendering differs on Windows"
+    )]
+    async fn session_info_first_event_shows_organization_snapshot() {
+        let mut config = test_config().await;
+        config.cwd = PathBuf::from("/tmp/project").abs();
+        let account_display = StatusAccountDisplay::ChatGpt {
+            email: Some("dev@example.com".to_string()),
+            plan: Some("Business".to_string()),
+            account_display_name: Some("Acme Corp".to_string()),
+            account_group_names: Some(vec!["Engineering".to_string(), "Research".to_string()]),
+        };
+
+        let cell = new_session_info(
+            &config,
+            "gpt-5",
+            session_configured_event("gpt-5"),
+            /*is_first_event*/ true,
+            /*tooltip_override*/ None,
+            Some(&account_display),
+            Some(PlanType::SelfServeBusinessUsageBased),
+            /*show_fast_status*/ false,
+        );
+
+        let rendered = render_transcript(&cell).join("\n");
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[tokio::test]
+    async fn session_info_regular_startup_shows_organization() {
+        let config = test_config().await;
+        let account_display = StatusAccountDisplay::ChatGpt {
+            email: Some("dev@example.com".to_string()),
+            plan: Some("Business".to_string()),
+            account_display_name: Some("Acme Corp".to_string()),
+            account_group_names: Some(vec!["Engineering".to_string(), "Research".to_string()]),
+        };
+
+        let cell = new_session_info(
+            &config,
+            "gpt-5",
+            session_configured_event("gpt-5"),
+            /*is_first_event*/ false,
+            /*tooltip_override*/ None,
+            Some(&account_display),
+            Some(PlanType::SelfServeBusinessUsageBased),
+            /*show_fast_status*/ false,
+        );
+
+        let rendered = render_transcript(&cell).join("\n");
+        assert!(rendered.contains("account:      dev@example.com (Business)"));
+        assert!(rendered.contains("organization: Acme Corp"));
+        assert!(rendered.contains("groups:       Engineering, Research"));
+        assert!(!rendered.contains("To get started"));
     }
 
     #[tokio::test]
@@ -3151,6 +3294,7 @@ mod tests {
             session_configured_event("gpt-5"),
             /*is_first_event*/ false,
             Some("Model just became available".to_string()),
+            /*account_display*/ None,
             Some(PlanType::Free),
             /*show_fast_status*/ false,
         );
@@ -3886,6 +4030,7 @@ mod tests {
             Some(ReasoningEffortConfig::High),
             /*show_fast_status*/ true,
             std::env::temp_dir(),
+            /*account_display*/ None,
             "test",
         );
 
@@ -3906,6 +4051,7 @@ mod tests {
             Some(ReasoningEffortConfig::High),
             /*show_fast_status*/ false,
             std::env::temp_dir(),
+            /*account_display*/ None,
             "test",
         );
 

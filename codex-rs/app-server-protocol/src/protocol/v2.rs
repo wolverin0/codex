@@ -1591,7 +1591,13 @@ pub enum Account {
 
     #[serde(rename = "chatgpt", rename_all = "camelCase")]
     #[ts(rename = "chatgpt", rename_all = "camelCase")]
-    Chatgpt { email: String, plan_type: PlanType },
+    Chatgpt {
+        email: String,
+        plan_type: PlanType,
+        account_id: Option<String>,
+        account_display_name: Option<String>,
+        account_group_names: Option<Vec<String>>,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]

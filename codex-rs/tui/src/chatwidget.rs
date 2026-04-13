@@ -2030,6 +2030,7 @@ impl ChatWidget {
             event,
             self.show_welcome_banner,
             startup_tooltip_override,
+            self.status_account_display.as_ref(),
             self.plan_type,
             show_fast_status,
         );
@@ -9647,6 +9648,7 @@ impl ChatWidget {
             /*reasoning_effort*/ None,
             /*show_fast_status*/ false,
             config.cwd.to_path_buf(),
+            /*account_display*/ None,
             CODEX_CLI_VERSION,
         ))
     }

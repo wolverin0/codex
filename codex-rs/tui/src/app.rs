@@ -1490,6 +1490,7 @@ impl App {
                 self.chat_widget.current_service_tier(),
             ),
             self.config.cwd.to_path_buf(),
+            self.chat_widget.status_account_display().cloned(),
             version,
         )
         .display_lines(width)
@@ -9150,6 +9151,7 @@ guardian_approval = true
                 event,
                 is_first,
                 /*tooltip_override*/ None,
+                /*account_display*/ None,
                 /*auth_plan*/ None,
                 /*show_fast_status*/ false,
             )) as Arc<dyn HistoryCell>
@@ -10429,6 +10431,7 @@ guardian_approval = true
                 event,
                 is_first,
                 /*tooltip_override*/ None,
+                /*account_display*/ None,
                 /*auth_plan*/ None,
                 /*show_fast_status*/ false,
             )) as Arc<dyn HistoryCell>
