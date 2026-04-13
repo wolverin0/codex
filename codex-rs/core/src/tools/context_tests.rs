@@ -1,4 +1,5 @@
 use super::*;
+use codex_protocol::models::ImageDetail;
 use core_test_support::assert_regex_match;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -98,6 +99,7 @@ fn mcp_tool_output_response_item_includes_wall_time() {
             meta: None,
         },
         wall_time: std::time::Duration::from_millis(1250),
+        can_request_original_image_detail: false,
     };
 
     let response = output.to_response_item(
@@ -149,6 +151,7 @@ fn mcp_tool_output_response_item_preserves_content_items() {
             meta: None,
         },
         wall_time: std::time::Duration::from_millis(500),
+        can_request_original_image_detail: false,
     };
 
     let response = output.to_response_item(
@@ -201,6 +204,7 @@ fn mcp_tool_output_code_mode_result_stays_raw_call_tool_result() {
             meta: None,
         },
         wall_time: std::time::Duration::from_millis(1250),
+        can_request_original_image_detail: false,
     };
 
     let result = output.code_mode_result(&ToolPayload::Mcp {
@@ -222,6 +226,110 @@ fn mcp_tool_output_code_mode_result_stays_raw_call_tool_result() {
             "isError": false,
         })
     );
+}
+
+#[test]
+fn mcp_tool_output_response_item_preserves_original_detail_when_supported() {
+    let image_url = "data:image/png;base64,AAA";
+    let output = McpToolOutput {
+        result: CallToolResult {
+            content: vec![serde_json::json!({
+                "type": "image",
+                "mimeType": "image/png",
+                "data": "AAA",
+                "_meta": {
+                    "codex/imageDetail": "original",
+                },
+            })],
+            structured_content: None,
+            is_error: Some(false),
+            meta: None,
+        },
+        wall_time: std::time::Duration::from_millis(500),
+        can_request_original_image_detail: true,
+    };
+
+    let response = output.to_response_item(
+        "mcp-call-3",
+        &ToolPayload::Mcp {
+            server: "server".to_string(),
+            tool: "tool".to_string(),
+            raw_arguments: "{}".to_string(),
+        },
+    );
+
+    match response {
+        ResponseInputItem::FunctionCallOutput { output, .. } => {
+            assert_eq!(
+                output.content_items(),
+                Some(
+                    vec![
+                        FunctionCallOutputContentItem::InputText {
+                            text: "Wall time: 0.5000 seconds\nOutput:".to_string(),
+                        },
+                        FunctionCallOutputContentItem::InputImage {
+                            image_url: image_url.to_string(),
+                            detail: Some(ImageDetail::Original),
+                        },
+                    ]
+                    .as_slice()
+                )
+            );
+        }
+        other => panic!("expected FunctionCallOutput, got {other:?}"),
+    }
+}
+
+#[test]
+fn mcp_tool_output_response_item_drops_original_detail_when_unsupported() {
+    let image_url = "data:image/png;base64,AAA";
+    let output = McpToolOutput {
+        result: CallToolResult {
+            content: vec![serde_json::json!({
+                "type": "image",
+                "mimeType": "image/png",
+                "data": "AAA",
+                "_meta": {
+                    "codex/imageDetail": "original",
+                },
+            })],
+            structured_content: None,
+            is_error: Some(false),
+            meta: None,
+        },
+        wall_time: std::time::Duration::from_millis(500),
+        can_request_original_image_detail: false,
+    };
+
+    let response = output.to_response_item(
+        "mcp-call-4",
+        &ToolPayload::Mcp {
+            server: "server".to_string(),
+            tool: "tool".to_string(),
+            raw_arguments: "{}".to_string(),
+        },
+    );
+
+    match response {
+        ResponseInputItem::FunctionCallOutput { output, .. } => {
+            assert_eq!(
+                output.content_items(),
+                Some(
+                    vec![
+                        FunctionCallOutputContentItem::InputText {
+                            text: "Wall time: 0.5000 seconds\nOutput:".to_string(),
+                        },
+                        FunctionCallOutputContentItem::InputImage {
+                            image_url: image_url.to_string(),
+                            detail: None,
+                        },
+                    ]
+                    .as_slice()
+                )
+            );
+        }
+        other => panic!("expected FunctionCallOutput, got {other:?}"),
+    }
 }
 
 #[test]

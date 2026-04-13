@@ -3,6 +3,9 @@ use serde_json::Value as JsonValue;
 use crate::response::FunctionCallOutputContentItem;
 use crate::response::ImageDetail;
 
+const IMAGE_HELPER_EXPECTS_MESSAGE: &str = "image expects a non-empty image URL string, an object with image_url and optional detail, or a raw MCP image block";
+const CODEX_IMAGE_DETAIL_META_KEY: &str = "codex/imageDetail";
+
 pub(super) fn serialize_output_text(
     scope: &mut v8::PinScope<'_, '_>,
     value: v8::Local<'_, v8::Value>,
@@ -39,40 +42,76 @@ pub(super) fn normalize_output_image(
         let (image_url, detail) = if value.is_string() {
             (value.to_rust_string_lossy(scope), None)
         } else if value.is_object() && !value.is_array() {
-            let object = v8::Local::<v8::Object>::try_from(value).map_err(|_| {
-                "image expects a non-empty image URL string or an object with image_url and optional detail".to_string()
-            })?;
+            let object = v8::Local::<v8::Object>::try_from(value)
+                .map_err(|_| IMAGE_HELPER_EXPECTS_MESSAGE.to_string())?;
             let image_url_key = v8::String::new(scope, "image_url")
                 .ok_or_else(|| "failed to allocate image helper keys".to_string())?;
-            let detail_key = v8::String::new(scope, "detail")
-                .ok_or_else(|| "failed to allocate image helper keys".to_string())?;
-            let image_url = object
-                .get(scope, image_url_key.into())
-                .filter(|value| value.is_string())
-                .map(|value| value.to_rust_string_lossy(scope))
-                .ok_or_else(|| {
-                    "image expects a non-empty image URL string or an object with image_url and optional detail"
-                        .to_string()
-                })?;
-            let detail = match object.get(scope, detail_key.into()) {
-                Some(value) if value.is_string() => Some(value.to_rust_string_lossy(scope)),
-                Some(value) if value.is_null() || value.is_undefined() => None,
-                Some(_) => return Err("image detail must be a string when provided".to_string()),
-                None => None,
-            };
-            (image_url, detail)
+            if let Some(image_url) = object.get(scope, image_url_key.into())
+                && !image_url.is_undefined()
+            {
+                if !image_url.is_string() {
+                    return Err(IMAGE_HELPER_EXPECTS_MESSAGE.to_string());
+                }
+                let detail_key = v8::String::new(scope, "detail")
+                    .ok_or_else(|| "failed to allocate image helper keys".to_string())?;
+                let detail = match object.get(scope, detail_key.into()) {
+                    Some(value) if value.is_string() => Some(value.to_rust_string_lossy(scope)),
+                    Some(value) if value.is_null() || value.is_undefined() => None,
+                    Some(_) => {
+                        return Err("image detail must be a string when provided".to_string());
+                    }
+                    None => None,
+                };
+                (image_url.to_rust_string_lossy(scope), detail)
+            } else {
+                let Some(result) = v8_value_to_json(scope, value)? else {
+                    return Err(IMAGE_HELPER_EXPECTS_MESSAGE.to_string());
+                };
+                let JsonValue::Object(result) = result else {
+                    return Err(IMAGE_HELPER_EXPECTS_MESSAGE.to_string());
+                };
+                let Some(item_type) = result.get("type").and_then(JsonValue::as_str) else {
+                    return Err(IMAGE_HELPER_EXPECTS_MESSAGE.to_string());
+                };
+                if item_type != "image" {
+                    return Err(format!(
+                        "image only accepts MCP image blocks, got \"{item_type}\""
+                    ));
+                }
+                let data = result
+                    .get("data")
+                    .and_then(JsonValue::as_str)
+                    .ok_or_else(|| "image expected MCP image data".to_string())?;
+                if data.is_empty() {
+                    return Err("image expected MCP image data".to_string());
+                }
+
+                let image_url = if data.to_ascii_lowercase().starts_with("data:") {
+                    data.to_string()
+                } else {
+                    let mime_type = result
+                        .get("mimeType")
+                        .or_else(|| result.get("mime_type"))
+                        .and_then(JsonValue::as_str)
+                        .filter(|mime_type| !mime_type.is_empty())
+                        .unwrap_or("application/octet-stream");
+                    format!("data:{mime_type};base64,{data}")
+                };
+                let detail = result
+                    .get("_meta")
+                    .and_then(JsonValue::as_object)
+                    .and_then(|meta| meta.get(CODEX_IMAGE_DETAIL_META_KEY))
+                    .and_then(JsonValue::as_str)
+                    .filter(|detail| *detail == "original")
+                    .map(str::to_string);
+                (image_url, detail)
+            }
         } else {
-            return Err(
-                "image expects a non-empty image URL string or an object with image_url and optional detail"
-                    .to_string(),
-            );
+            return Err(IMAGE_HELPER_EXPECTS_MESSAGE.to_string());
         };
 
         if image_url.is_empty() {
-            return Err(
-                "image expects a non-empty image URL string or an object with image_url and optional detail"
-                    .to_string(),
-            );
+            return Err(IMAGE_HELPER_EXPECTS_MESSAGE.to_string());
         }
         let lower = image_url.to_ascii_lowercase();
         if !(lower.starts_with("http://")

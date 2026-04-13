@@ -11,6 +11,7 @@ use std::time::UNIX_EPOCH;
 
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerTransportConfig;
+use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_models_manager::manager::RefreshStrategy;
 
@@ -32,10 +33,12 @@ use codex_protocol::user_input::UserInput;
 use codex_utils_cargo_bin::cargo_bin;
 use core_test_support::assert_regex_match;
 use core_test_support::responses;
+use core_test_support::responses::ev_custom_tool_call;
 use core_test_support::responses::mount_models_once;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::skip_if_no_network;
 use core_test_support::stdio_server_bin;
+use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_with_timeout;
@@ -79,6 +82,33 @@ fn assert_wall_time_header(output: &str) {
 enum McpCallEvent {
     Begin(String),
     End(String),
+}
+
+async fn wait_for_mcp_tool(fixture: &TestCodex, tool_name: &str) -> anyhow::Result<()> {
+    let tools_ready_deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        fixture.codex.submit(Op::ListMcpTools).await?;
+        let list_event = wait_for_event_with_timeout(
+            &fixture.codex,
+            |ev| matches!(ev, EventMsg::McpListToolsResponse(_)),
+            Duration::from_secs(10),
+        )
+        .await;
+        let EventMsg::McpListToolsResponse(tool_list) = list_event else {
+            unreachable!("event guard guarantees McpListToolsResponse");
+        };
+        if tool_list.tools.contains_key(tool_name) {
+            return Ok(());
+        }
+
+        let available_tools: Vec<&str> = tool_list.tools.keys().map(String::as_str).collect();
+        if Instant::now() >= tools_ready_deadline {
+            panic!(
+                "timed out waiting for MCP tool {tool_name} to become available; discovered tools: {available_tools:?}"
+            );
+        }
+        sleep(Duration::from_millis(200)).await;
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
@@ -566,30 +596,7 @@ async fn stdio_image_responses_round_trip() -> anyhow::Result<()> {
         .await?;
     let session_model = fixture.session_configured.model.clone();
 
-    let tools_ready_deadline = Instant::now() + Duration::from_secs(30);
-    loop {
-        fixture.codex.submit(Op::ListMcpTools).await?;
-        let list_event = wait_for_event_with_timeout(
-            &fixture.codex,
-            |ev| matches!(ev, EventMsg::McpListToolsResponse(_)),
-            Duration::from_secs(10),
-        )
-        .await;
-        let EventMsg::McpListToolsResponse(tool_list) = list_event else {
-            unreachable!("event guard guarantees McpListToolsResponse");
-        };
-        if tool_list.tools.contains_key(&tool_name) {
-            break;
-        }
-
-        let available_tools: Vec<&str> = tool_list.tools.keys().map(String::as_str).collect();
-        if Instant::now() >= tools_ready_deadline {
-            panic!(
-                "timed out waiting for MCP tool {tool_name} to become available; discovered tools: {available_tools:?}"
-            );
-        }
-        sleep(Duration::from_millis(200)).await;
-    }
+    wait_for_mcp_tool(&fixture, &tool_name).await?;
 
     fixture
         .codex
@@ -680,6 +687,294 @@ async fn stdio_image_responses_round_trip() -> anyhow::Result<()> {
             "image_url": OPENAI_PNG
         })
     );
+    server.verify().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[serial(mcp_test_value)]
+async fn stdio_image_responses_preserve_original_detail_metadata() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+
+    let call_id = "img-original-detail-1";
+    let server_name = "rmcp";
+    let tool_name = format!("mcp__{server_name}__image_scenario");
+
+    mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_function_call(
+                call_id,
+                &tool_name,
+                r#"{"scenario":"image_only_original_detail"}"#,
+            ),
+            responses::ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let final_mock = mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_assistant_message("msg-1", "rmcp original-detail image completed."),
+            responses::ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    let rmcp_test_server_bin = stdio_server_bin()?;
+
+    let fixture = test_codex()
+        .with_model("gpt-5.3-codex")
+        .with_config(move |config| {
+            config
+                .features
+                .enable(Feature::ImageDetailOriginal)
+                .expect("test config should allow feature update");
+
+            let mut servers = config.mcp_servers.get().clone();
+            servers.insert(
+                server_name.to_string(),
+                McpServerConfig {
+                    transport: McpServerTransportConfig::Stdio {
+                        command: rmcp_test_server_bin,
+                        args: Vec::new(),
+                        env: None,
+                        env_vars: Vec::new(),
+                        cwd: None,
+                    },
+                    enabled: true,
+                    required: false,
+                    supports_parallel_tool_calls: false,
+                    disabled_reason: None,
+                    startup_timeout_sec: Some(Duration::from_secs(10)),
+                    tool_timeout_sec: None,
+                    enabled_tools: None,
+                    disabled_tools: None,
+                    scopes: None,
+                    oauth_resource: None,
+                    tools: HashMap::new(),
+                },
+            );
+            config
+                .mcp_servers
+                .set(servers)
+                .expect("test mcp servers should accept any configuration");
+        })
+        .build(&server)
+        .await?;
+    let session_model = fixture.session_configured.model.clone();
+
+    wait_for_mcp_tool(&fixture, &tool_name).await?;
+
+    fixture
+        .codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "call the rmcp image_scenario tool".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: fixture.cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            model: session_model,
+            effort: None,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+
+    let begin_event = wait_for_event(&fixture.codex, |ev| {
+        matches!(ev, EventMsg::McpToolCallBegin(_))
+    })
+    .await;
+    let EventMsg::McpToolCallBegin(begin) = begin_event else {
+        unreachable!("begin");
+    };
+    assert_eq!(
+        begin,
+        McpToolCallBeginEvent {
+            call_id: call_id.to_string(),
+            invocation: McpInvocation {
+                server: server_name.to_string(),
+                tool: "image_scenario".to_string(),
+                arguments: Some(json!({
+                    "scenario": "image_only_original_detail",
+                })),
+            },
+        },
+    );
+
+    let end_event = wait_for_event(&fixture.codex, |ev| {
+        matches!(ev, EventMsg::McpToolCallEnd(_))
+    })
+    .await;
+    let EventMsg::McpToolCallEnd(end) = end_event else {
+        unreachable!("end");
+    };
+    assert_eq!(end.call_id, call_id);
+    assert_eq!(
+        end.invocation,
+        McpInvocation {
+            server: server_name.to_string(),
+            tool: "image_scenario".to_string(),
+            arguments: Some(json!({
+                "scenario": "image_only_original_detail",
+            })),
+        }
+    );
+    let result = end
+        .result
+        .expect("rmcp image_scenario should return success");
+    assert_eq!(result.is_error, Some(false));
+    assert_eq!(result.content.len(), 1);
+    let entry = result.content[0].as_object().expect("content object");
+    assert_eq!(entry.get("type"), Some(&json!("image")));
+    assert_eq!(
+        entry.get("_meta"),
+        Some(&json!({
+            "codex/imageDetail": "original",
+        }))
+    );
+
+    wait_for_event(&fixture.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let output_item = final_mock.single_request().function_call_output(call_id);
+    let output = output_item["output"]
+        .as_array()
+        .expect("image MCP output should be content items");
+    assert_eq!(output.len(), 2);
+    assert_wall_time_header(
+        output[0]["text"]
+            .as_str()
+            .expect("first MCP image output item should be wall-time text"),
+    );
+    assert_eq!(
+        output[1],
+        json!({
+            "type": "input_image",
+            "image_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==",
+            "detail": "original",
+        })
+    );
+
+    server.verify().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[serial(mcp_test_value)]
+async fn js_repl_emit_image_preserves_original_detail_for_mcp_images() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let call_id = "js-repl-rmcp-image";
+    let rmcp_test_server_bin = stdio_server_bin()?;
+
+    let fixture = test_codex()
+        .with_model("gpt-5.3-codex")
+        .with_config(move |config| {
+            config
+                .features
+                .enable(Feature::JsRepl)
+                .expect("test config should allow feature update");
+            config
+                .features
+                .enable(Feature::ImageDetailOriginal)
+                .expect("test config should allow feature update");
+
+            let mut servers = config.mcp_servers.get().clone();
+            servers.insert(
+                "rmcp".to_string(),
+                McpServerConfig {
+                    transport: McpServerTransportConfig::Stdio {
+                        command: rmcp_test_server_bin,
+                        args: Vec::new(),
+                        env: None,
+                        env_vars: Vec::new(),
+                        cwd: None,
+                    },
+                    enabled: true,
+                    required: false,
+                    supports_parallel_tool_calls: false,
+                    disabled_reason: None,
+                    startup_timeout_sec: Some(Duration::from_secs(10)),
+                    tool_timeout_sec: None,
+                    enabled_tools: None,
+                    disabled_tools: None,
+                    scopes: None,
+                    oauth_resource: None,
+                    tools: HashMap::new(),
+                },
+            );
+            config
+                .mcp_servers
+                .set(servers)
+                .expect("test mcp servers should accept any configuration");
+        })
+        .build(&server)
+        .await?;
+
+    wait_for_mcp_tool(&fixture, "mcp__rmcp__image_scenario").await?;
+
+    mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            ev_custom_tool_call(
+                call_id,
+                "js_repl",
+                r#"
+const out = await codex.tool("mcp__rmcp__image_scenario", {
+  scenario: "image_only_original_detail",
+});
+await codex.emitImage(out);
+"#,
+            ),
+            responses::ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let final_mock = mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_assistant_message("msg-1", "done"),
+            responses::ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    fixture
+        .submit_turn("use js_repl to emit the rmcp image scenario output")
+        .await?;
+    wait_for_event(&fixture.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let output = final_mock.single_request().custom_tool_call_output(call_id);
+    let output_items = output["output"]
+        .as_array()
+        .expect("js_repl output should be content items");
+    let image_item = output_items
+        .iter()
+        .find(|item| item.get("type").and_then(Value::as_str) == Some("input_image"))
+        .expect("js_repl should emit an input_image item");
+    assert_eq!(
+        image_item.get("detail").and_then(Value::as_str),
+        Some("original")
+    );
+    assert!(
+        image_item
+            .get("image_url")
+            .and_then(Value::as_str)
+            .is_some_and(|image_url| image_url.starts_with("data:image/png;base64,")),
+        "js_repl should emit a png data URL"
+    );
+
     server.verify().await;
     Ok(())
 }
@@ -1311,30 +1606,7 @@ async fn streamable_http_with_oauth_round_trip_impl() -> anyhow::Result<()> {
         .await?;
     let session_model = fixture.session_configured.model.clone();
 
-    let tools_ready_deadline = Instant::now() + Duration::from_secs(30);
-    loop {
-        fixture.codex.submit(Op::ListMcpTools).await?;
-        let list_event = wait_for_event_with_timeout(
-            &fixture.codex,
-            |ev| matches!(ev, EventMsg::McpListToolsResponse(_)),
-            Duration::from_secs(10),
-        )
-        .await;
-        let EventMsg::McpListToolsResponse(tool_list) = list_event else {
-            unreachable!("event guard guarantees McpListToolsResponse");
-        };
-        if tool_list.tools.contains_key(&tool_name) {
-            break;
-        }
-
-        let available_tools: Vec<&str> = tool_list.tools.keys().map(String::as_str).collect();
-        if Instant::now() >= tools_ready_deadline {
-            panic!(
-                "timed out waiting for MCP tool {tool_name} to become available; discovered tools: {available_tools:?}"
-            );
-        }
-        sleep(Duration::from_millis(200)).await;
-    }
+    wait_for_mcp_tool(&fixture, &tool_name).await?;
 
     fixture
         .codex

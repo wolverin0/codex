@@ -9,6 +9,7 @@ use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::ImageDetail;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::SearchToolCallParams;
 use codex_protocol::models::ShellToolCallParams;
@@ -122,6 +123,7 @@ impl ToolOutput for CallToolResult {
 pub struct McpToolOutput {
     pub result: CallToolResult,
     pub wall_time: Duration,
+    pub can_request_original_image_detail: bool,
 }
 
 impl ToolOutput for McpToolOutput {
@@ -155,6 +157,17 @@ impl ToolOutput for McpToolOutput {
 impl McpToolOutput {
     fn response_payload(&self) -> FunctionCallOutputPayload {
         let mut payload = self.result.as_function_call_output_payload();
+        if let Some(items) = payload.content_items_mut() {
+            for item in items {
+                if let FunctionCallOutputContentItem::InputImage { detail, .. } = item
+                    && matches!(detail, Some(ImageDetail::Original))
+                    && !self.can_request_original_image_detail
+                {
+                    *detail = None;
+                }
+            }
+        }
+
         let wall_time_seconds = self.wall_time.as_secs_f64();
         let header = format!("Wall time: {wall_time_seconds:.4} seconds\nOutput:");
 

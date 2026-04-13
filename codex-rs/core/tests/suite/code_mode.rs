@@ -5,6 +5,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerTransportConfig;
+use codex_core::config::Config;
 use codex_features::Feature;
 use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
@@ -178,44 +179,54 @@ async fn run_code_mode_turn_with_rmcp(
     prompt: &str,
     code: &str,
 ) -> Result<(TestCodex, ResponseMock)> {
-    let rmcp_test_server_bin = stdio_server_bin()?;
-    let mut builder = test_codex()
-        .with_model("test-gpt-5.1-codex")
-        .with_config(move |config| {
-            let _ = config.features.enable(Feature::CodeMode);
+    run_code_mode_turn_with_rmcp_config(server, prompt, code, "test-gpt-5.1-codex", |_config| {})
+        .await
+}
 
-            let mut servers = config.mcp_servers.get().clone();
-            servers.insert(
-                "rmcp".to_string(),
-                McpServerConfig {
-                    transport: McpServerTransportConfig::Stdio {
-                        command: rmcp_test_server_bin,
-                        args: Vec::new(),
-                        env: Some(HashMap::from([(
-                            "MCP_TEST_VALUE".to_string(),
-                            "propagated-env".to_string(),
-                        )])),
-                        env_vars: Vec::new(),
-                        cwd: None,
-                    },
-                    enabled: true,
-                    required: false,
-                    supports_parallel_tool_calls: false,
-                    disabled_reason: None,
-                    startup_timeout_sec: Some(Duration::from_secs(10)),
-                    tool_timeout_sec: None,
-                    enabled_tools: None,
-                    disabled_tools: None,
-                    scopes: None,
-                    oauth_resource: None,
-                    tools: HashMap::new(),
+async fn run_code_mode_turn_with_rmcp_config(
+    server: &MockServer,
+    prompt: &str,
+    code: &str,
+    model: &'static str,
+    config_mutator: impl FnOnce(&mut Config) + Send + 'static,
+) -> Result<(TestCodex, ResponseMock)> {
+    let rmcp_test_server_bin = stdio_server_bin()?;
+    let mut builder = test_codex().with_model(model).with_config(move |config| {
+        let _ = config.features.enable(Feature::CodeMode);
+        config_mutator(config);
+
+        let mut servers = config.mcp_servers.get().clone();
+        servers.insert(
+            "rmcp".to_string(),
+            McpServerConfig {
+                transport: McpServerTransportConfig::Stdio {
+                    command: rmcp_test_server_bin,
+                    args: Vec::new(),
+                    env: Some(HashMap::from([(
+                        "MCP_TEST_VALUE".to_string(),
+                        "propagated-env".to_string(),
+                    )])),
+                    env_vars: Vec::new(),
+                    cwd: None,
                 },
-            );
-            config
-                .mcp_servers
-                .set(servers)
-                .expect("test mcp servers should accept any configuration");
-        });
+                enabled: true,
+                required: false,
+                supports_parallel_tool_calls: false,
+                disabled_reason: None,
+                startup_timeout_sec: Some(Duration::from_secs(10)),
+                tool_timeout_sec: None,
+                enabled_tools: None,
+                disabled_tools: None,
+                scopes: None,
+                oauth_resource: None,
+                tools: HashMap::new(),
+            },
+        );
+        config
+            .mcp_servers
+            .set(servers)
+            .expect("test mcp servers should accept any configuration");
+    });
     let test = builder.build(server).await?;
 
     responses::mount_sse_once(
@@ -1879,6 +1890,66 @@ image(out);
         success,
         Some(false),
         "code_mode view_image call failed unexpectedly"
+    );
+    assert_eq!(items.len(), 2);
+    assert_regex_match(
+        concat!(
+            r"(?s)\A",
+            r"Script completed\nWall time \d+\.\d seconds\nOutput:\n\z"
+        ),
+        text_item(&items, /*index*/ 0),
+    );
+
+    assert_eq!(
+        items[1].get("type").and_then(Value::as_str),
+        Some("input_image")
+    );
+
+    let emitted_image_url = items[1]
+        .get("image_url")
+        .and_then(Value::as_str)
+        .expect("image helper should emit an input_image item with image_url");
+    assert!(emitted_image_url.starts_with("data:image/png;base64,"));
+    assert_eq!(
+        items[1].get("detail").and_then(Value::as_str),
+        Some("original")
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_can_use_mcp_image_result_with_image_helper_when_original_detail_is_enabled()
+-> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let code = r#"
+const out = await tools.mcp__rmcp__image_scenario({
+  scenario: "image_only_original_detail",
+});
+const imageItem = out.content.find((item) => item.type === "image");
+image(imageItem);
+"#;
+
+    let (_test, second_mock) = run_code_mode_turn_with_rmcp_config(
+        &server,
+        "use exec to call the rmcp image scenario tool and emit its image output",
+        code,
+        "gpt-5.3-codex",
+        |config| {
+            let _ = config.features.enable(Feature::ImageDetailOriginal);
+        },
+    )
+    .await?;
+
+    let req = second_mock.single_request();
+    let items = custom_tool_output_items(&req, "call-1");
+    let (_, success) = custom_tool_output_body_and_success(&req, "call-1");
+    assert_ne!(
+        success,
+        Some(false),
+        "code_mode mcp image scenario call failed unexpectedly"
     );
     assert_eq!(items.len(), 2);
     assert_regex_match(

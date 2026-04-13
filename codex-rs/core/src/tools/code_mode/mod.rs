@@ -11,6 +11,7 @@ use codex_code_mode::CodeModeTurnHost;
 use codex_code_mode::RuntimeResponse;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::ImageDetail;
 use codex_protocol::models::ResponseInputItem;
 use serde_json::Value as JsonValue;
 use tokio_util::sync::CancellationToken;
@@ -18,6 +19,7 @@ use tokio_util::sync::CancellationToken;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::function_tool::FunctionCallError;
+use crate::original_image_detail::can_request_original_image_detail;
 use crate::tools::ToolRouter;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::SharedTurnDiffTracker;
@@ -160,12 +162,14 @@ pub(super) async fn handle_runtime_response(
     match response {
         RuntimeResponse::Yielded { content_items, .. } => {
             let mut content_items = into_function_call_output_content_items(content_items);
+            sanitize_original_image_detail(exec.turn.as_ref(), &mut content_items);
             content_items = truncate_code_mode_result(content_items, max_output_tokens);
             prepend_script_status(&mut content_items, &script_status, started_at.elapsed());
             Ok(FunctionToolOutput::from_content(content_items, Some(true)))
         }
         RuntimeResponse::Terminated { content_items, .. } => {
             let mut content_items = into_function_call_output_content_items(content_items);
+            sanitize_original_image_detail(exec.turn.as_ref(), &mut content_items);
             content_items = truncate_code_mode_result(content_items, max_output_tokens);
             prepend_script_status(&mut content_items, &script_status, started_at.elapsed());
             Ok(FunctionToolOutput::from_content(content_items, Some(true)))
@@ -177,6 +181,7 @@ pub(super) async fn handle_runtime_response(
             ..
         } => {
             let mut content_items = into_function_call_output_content_items(content_items);
+            sanitize_original_image_detail(exec.turn.as_ref(), &mut content_items);
             exec.session
                 .services
                 .code_mode_service
@@ -194,6 +199,20 @@ pub(super) async fn handle_runtime_response(
                 content_items,
                 Some(success),
             ))
+        }
+    }
+}
+
+fn sanitize_original_image_detail(turn: &TurnContext, items: &mut [FunctionCallOutputContentItem]) {
+    if can_request_original_image_detail(turn.features.get(), &turn.model_info) {
+        return;
+    }
+
+    for item in items {
+        if let FunctionCallOutputContentItem::InputImage { detail, .. } = item
+            && matches!(detail, Some(ImageDetail::Original))
+        {
+            *detail = None;
         }
     }
 }
