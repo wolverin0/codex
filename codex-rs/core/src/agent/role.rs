@@ -175,6 +175,7 @@ mod reload {
         if preserve_current_profile {
             next_config.active_profile = config.active_profile.clone();
         }
+        next_config.loader_overrides = config.loader_overrides.clone();
         Ok(next_config)
     }
 

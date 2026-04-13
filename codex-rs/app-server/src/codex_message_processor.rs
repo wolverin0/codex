@@ -437,6 +437,7 @@ pub(crate) struct CodexMessageProcessor {
     cli_overrides: Arc<RwLock<Vec<(String, TomlValue)>>>,
     runtime_feature_enablement: Arc<RwLock<BTreeMap<String, bool>>>,
     cloud_requirements: Arc<RwLock<CloudRequirementsLoader>>,
+    loader_overrides: LoaderOverrides,
     active_login: Arc<Mutex<Option<ActiveLogin>>>,
     pending_thread_unloads: Arc<Mutex<HashSet<ThreadId>>>,
     thread_state_manager: ThreadStateManager,
@@ -468,6 +469,7 @@ struct ListenerTaskContext {
     thread_watch_manager: ThreadWatchManager,
     fallback_model_provider: String,
     codex_home: PathBuf,
+    loader_overrides: LoaderOverrides,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -597,6 +599,7 @@ pub(crate) struct CodexMessageProcessorArgs {
     pub(crate) cli_overrides: Arc<RwLock<Vec<(String, TomlValue)>>>,
     pub(crate) runtime_feature_enablement: Arc<RwLock<BTreeMap<String, bool>>>,
     pub(crate) cloud_requirements: Arc<RwLock<CloudRequirementsLoader>>,
+    pub(crate) loader_overrides: LoaderOverrides,
     pub(crate) feedback: CodexFeedback,
     pub(crate) log_db: Option<LogDbLayer>,
 }
@@ -670,6 +673,7 @@ impl CodexMessageProcessor {
             cli_overrides,
             runtime_feature_enablement,
             cloud_requirements,
+            loader_overrides,
             feedback,
             log_db,
         } = args;
@@ -683,6 +687,7 @@ impl CodexMessageProcessor {
             cli_overrides,
             runtime_feature_enablement,
             cloud_requirements,
+            loader_overrides,
             active_login: Arc::new(Mutex::new(None)),
             pending_thread_unloads: Arc::new(Mutex::new(HashSet::new())),
             thread_state_manager: ThreadStateManager::new(),
@@ -705,6 +710,7 @@ impl CodexMessageProcessor {
             .cli_overrides(self.current_cli_overrides())
             .fallback_cwd(fallback_cwd)
             .cloud_requirements(cloud_requirements)
+            .loader_overrides(self.loader_overrides.clone())
             .build()
             .await
             .map_err(|err| JSONRPCErrorError {
@@ -2263,6 +2269,7 @@ impl CodexMessageProcessor {
             thread_watch_manager: self.thread_watch_manager.clone(),
             fallback_model_provider: self.config.model_provider_id.clone(),
             codex_home: self.config.codex_home.to_path_buf(),
+            loader_overrides: self.loader_overrides.clone(),
         };
         let request_trace = request_context.request_trace();
         let runtime_feature_enablement = self.current_runtime_feature_enablement();
@@ -2367,6 +2374,7 @@ impl CodexMessageProcessor {
             typesafe_overrides.clone(),
             &cloud_requirements,
             &listener_task_context.codex_home,
+            &listener_task_context.loader_overrides,
             &runtime_feature_enablement,
         )
         .await
@@ -2447,6 +2455,7 @@ impl CodexMessageProcessor {
                 typesafe_overrides,
                 &cloud_requirements,
                 &listener_task_context.codex_home,
+                &listener_task_context.loader_overrides,
                 &runtime_feature_enablement,
             )
             .await
@@ -4126,14 +4135,18 @@ impl CodexMessageProcessor {
         let cloud_requirements = self.current_cloud_requirements();
         let cli_overrides = self.current_cli_overrides();
         let runtime_feature_enablement = self.current_runtime_feature_enablement();
+        let derivation_context = ConfigDerivationContext {
+            cli_overrides: &cli_overrides,
+            cloud_requirements: &cloud_requirements,
+            codex_home: &self.config.codex_home,
+            loader_overrides: &self.loader_overrides,
+            runtime_feature_enablement: &runtime_feature_enablement,
+        };
         let config = match derive_config_for_cwd(
-            &cli_overrides,
+            derivation_context,
             request_overrides,
             typesafe_overrides,
             history_cwd,
-            &cloud_requirements,
-            &self.config.codex_home,
-            &runtime_feature_enablement,
         )
         .await
         {
@@ -4689,14 +4702,18 @@ impl CodexMessageProcessor {
         let cloud_requirements = self.current_cloud_requirements();
         let cli_overrides = self.current_cli_overrides();
         let runtime_feature_enablement = self.current_runtime_feature_enablement();
+        let derivation_context = ConfigDerivationContext {
+            cli_overrides: &cli_overrides,
+            cloud_requirements: &cloud_requirements,
+            codex_home: &self.config.codex_home,
+            loader_overrides: &self.loader_overrides,
+            runtime_feature_enablement: &runtime_feature_enablement,
+        };
         let config = match derive_config_for_cwd(
-            &cli_overrides,
+            derivation_context,
             request_overrides,
             typesafe_overrides,
             history_cwd,
-            &cloud_requirements,
-            &self.config.codex_home,
-            &runtime_feature_enablement,
         )
         .await
         {
@@ -6283,7 +6300,7 @@ impl CodexMessageProcessor {
                 &self.config.codex_home,
                 Some(cwd_abs.clone()),
                 &cli_overrides,
-                LoaderOverrides::default(),
+                self.loader_overrides.clone(),
                 CloudRequirementsLoader::default(),
             )
             .await
@@ -7610,6 +7627,7 @@ impl CodexMessageProcessor {
                 thread_watch_manager: self.thread_watch_manager.clone(),
                 fallback_model_provider: self.config.model_provider_id.clone(),
                 codex_home: self.config.codex_home.to_path_buf(),
+                loader_overrides: self.loader_overrides.clone(),
             },
             conversation_id,
             connection_id,
@@ -7724,6 +7742,7 @@ impl CodexMessageProcessor {
                 thread_watch_manager: self.thread_watch_manager.clone(),
                 fallback_model_provider: self.config.model_provider_id.clone(),
                 codex_home: self.config.codex_home.to_path_buf(),
+                loader_overrides: self.loader_overrides.clone(),
             },
             conversation_id,
             conversation,
@@ -7773,6 +7792,7 @@ impl CodexMessageProcessor {
             thread_watch_manager,
             fallback_model_provider,
             codex_home,
+            loader_overrides: _,
         } = listener_task_context;
         let outgoing_for_task = Arc::clone(&outgoing);
         tokio::spawn(async move {
@@ -8249,6 +8269,7 @@ impl CodexMessageProcessor {
         };
         let config = Arc::clone(&self.config);
         let cloud_requirements = self.current_cloud_requirements();
+        let loader_overrides = self.loader_overrides.clone();
         let command_cwd = params
             .cwd
             .map(PathBuf::from)
@@ -8259,17 +8280,21 @@ impl CodexMessageProcessor {
         let connection_id = request_id.connection_id;
 
         tokio::spawn(async move {
+            let derivation_context = ConfigDerivationContext {
+                cli_overrides: &cli_overrides,
+                cloud_requirements: &cloud_requirements,
+                codex_home: &config.codex_home,
+                loader_overrides: &loader_overrides,
+                runtime_feature_enablement: &runtime_feature_enablement,
+            };
             let derived_config = derive_config_for_cwd(
-                &cli_overrides,
+                derivation_context,
                 /*request_overrides*/ None,
                 ConfigOverrides {
                     cwd: Some(command_cwd.clone()),
                     ..Default::default()
                 },
                 Some(command_cwd.clone()),
-                &cloud_requirements,
-                &config.codex_home,
-                &runtime_feature_enablement,
             )
             .await;
             let setup_result = match derived_config {
@@ -8992,6 +9017,7 @@ async fn derive_config_from_params(
     typesafe_overrides: ConfigOverrides,
     cloud_requirements: &CloudRequirementsLoader,
     codex_home: &Path,
+    loader_overrides: &LoaderOverrides,
     runtime_feature_enablement: &BTreeMap<String, bool>,
 ) -> std::io::Result<Config> {
     let merged_cli_overrides = cli_overrides
@@ -9010,22 +9036,29 @@ async fn derive_config_from_params(
         .cli_overrides(merged_cli_overrides)
         .harness_overrides(typesafe_overrides)
         .cloud_requirements(cloud_requirements.clone())
+        .loader_overrides(loader_overrides.clone())
         .build()
         .await?;
     apply_runtime_feature_enablement(&mut config, runtime_feature_enablement);
     Ok(config)
 }
 
+struct ConfigDerivationContext<'a> {
+    cli_overrides: &'a [(String, TomlValue)],
+    cloud_requirements: &'a CloudRequirementsLoader,
+    codex_home: &'a Path,
+    loader_overrides: &'a LoaderOverrides,
+    runtime_feature_enablement: &'a BTreeMap<String, bool>,
+}
+
 async fn derive_config_for_cwd(
-    cli_overrides: &[(String, TomlValue)],
+    context: ConfigDerivationContext<'_>,
     request_overrides: Option<HashMap<String, serde_json::Value>>,
     typesafe_overrides: ConfigOverrides,
     cwd: Option<PathBuf>,
-    cloud_requirements: &CloudRequirementsLoader,
-    codex_home: &Path,
-    runtime_feature_enablement: &BTreeMap<String, bool>,
 ) -> std::io::Result<Config> {
-    let merged_cli_overrides = cli_overrides
+    let merged_cli_overrides = context
+        .cli_overrides
         .iter()
         .cloned()
         .chain(
@@ -9037,14 +9070,15 @@ async fn derive_config_for_cwd(
         .collect::<Vec<_>>();
 
     let mut config = codex_core::config::ConfigBuilder::default()
-        .codex_home(codex_home.to_path_buf())
+        .codex_home(context.codex_home.to_path_buf())
         .cli_overrides(merged_cli_overrides)
         .harness_overrides(typesafe_overrides)
         .fallback_cwd(cwd)
-        .cloud_requirements(cloud_requirements.clone())
+        .cloud_requirements(context.cloud_requirements.clone())
+        .loader_overrides(context.loader_overrides.clone())
         .build()
         .await?;
-    apply_runtime_feature_enablement(&mut config, runtime_feature_enablement);
+    apply_runtime_feature_enablement(&mut config, context.runtime_feature_enablement);
     Ok(config)
 }
 

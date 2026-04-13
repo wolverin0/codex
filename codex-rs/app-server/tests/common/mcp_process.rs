@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 use std::path::Path;
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
@@ -101,6 +102,10 @@ pub struct McpProcess {
 
 pub const DEFAULT_CLIENT_NAME: &str = "codex-app-server-tests";
 
+pub fn managed_config_test_override_path(codex_home: &Path) -> PathBuf {
+    codex_home.join(".managed_config_test_override.toml")
+}
+
 impl McpProcess {
     pub async fn new(codex_home: &Path) -> anyhow::Result<Self> {
         Self::new_with_env_and_args(codex_home, &[], &[]).await
@@ -137,6 +142,11 @@ impl McpProcess {
         cmd.current_dir(codex_home);
         cmd.env("CODEX_HOME", codex_home);
         cmd.env("RUST_LOG", "info");
+        // Keep integration tests hermetic on managed macOS hosts.
+        cmd.env(
+            "CODEX_APP_SERVER_MANAGED_CONFIG_PATH",
+            managed_config_test_override_path(codex_home),
+        );
         cmd.env_remove(CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR);
         cmd.args(args);
 

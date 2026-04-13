@@ -4418,7 +4418,7 @@ fn forced_chatgpt_workspace_id_accepts_string_and_list() -> std::io::Result<()> 
     let single_config = Config::load_from_base_config_with_overrides(
         single_cfg,
         ConfigOverrides::default(),
-        codex_home.path().to_path_buf(),
+        codex_home.abs(),
     )?;
 
     assert_eq!(
@@ -4433,7 +4433,7 @@ fn forced_chatgpt_workspace_id_accepts_string_and_list() -> std::io::Result<()> 
     let list_config = Config::load_from_base_config_with_overrides(
         list_cfg,
         ConfigOverrides::default(),
-        codex_home.path().to_path_buf(),
+        codex_home.abs(),
     )?;
 
     assert_eq!(
@@ -4624,6 +4624,7 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             sqlite_home: fixture.codex_home().to_path_buf(),
             log_dir: fixture.codex_home().join("log").to_path_buf(),
             config_layer_stack: Default::default(),
+            loader_overrides: LoaderOverrides::default(),
             startup_warnings: Vec::new(),
             history: History::default(),
             ephemeral: false,
@@ -4773,6 +4774,7 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         sqlite_home: fixture.codex_home().to_path_buf(),
         log_dir: fixture.codex_home().join("log").to_path_buf(),
         config_layer_stack: Default::default(),
+        loader_overrides: LoaderOverrides::default(),
         startup_warnings: Vec::new(),
         history: History::default(),
         ephemeral: false,
@@ -4920,6 +4922,7 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         sqlite_home: fixture.codex_home().to_path_buf(),
         log_dir: fixture.codex_home().join("log").to_path_buf(),
         config_layer_stack: Default::default(),
+        loader_overrides: LoaderOverrides::default(),
         startup_warnings: Vec::new(),
         history: History::default(),
         ephemeral: false,
@@ -5053,6 +5056,7 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         sqlite_home: fixture.codex_home().to_path_buf(),
         log_dir: fixture.codex_home().join("log").to_path_buf(),
         config_layer_stack: Default::default(),
+        loader_overrides: LoaderOverrides::default(),
         startup_warnings: Vec::new(),
         history: History::default(),
         ephemeral: false,

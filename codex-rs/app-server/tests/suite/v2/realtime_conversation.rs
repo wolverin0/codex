@@ -962,35 +962,8 @@ async fn realtime_webrtc_start_emits_sdp_notification() -> Result<()> {
         "unexpected close reason: {closed_notification:?}"
     );
 
-    let request = call_capture.single_request();
-    assert_eq!(request.url.path(), "/v1/realtime/calls");
-    assert_eq!(request.url.query(), None);
-    assert_eq!(
-        request
-            .headers
-            .get("content-type")
-            .and_then(|value| value.to_str().ok()),
-        Some("multipart/form-data; boundary=codex-realtime-call-boundary")
-    );
-    let body = String::from_utf8(request.body).context("multipart body should be utf-8")?;
     let session = r#"{"tool_choice":"auto","type":"realtime","model":"gpt-realtime-1.5","instructions":"backend prompt\n\nstartup context","output_modalities":["audio"],"audio":{"input":{"format":{"type":"audio/pcm","rate":24000},"noise_reduction":{"type":"near_field"},"turn_detection":{"type":"server_vad","interrupt_response":true,"create_response":true}},"output":{"format":{"type":"audio/pcm","rate":24000},"voice":"marin"}},"tools":[{"type":"function","name":"background_agent","description":"Send a user request to the background agent. Use this as the default action. Do not rephrase the user's ask or rewrite it in your own words; pass along the user's own words. If the background agent is idle, this starts a new task and returns the final result to the user. If the background agent is already working on a task, this sends the request as guidance to steer that previous task. If the user asks to do something next, later, after this, or once current work finishes, call this tool so the work is actually queued instead of merely promising to do it later.","parameters":{"type":"object","properties":{"prompt":{"type":"string","description":"The user request to delegate to the background agent."}},"required":["prompt"],"additionalProperties":false}}]}"#;
-    assert_eq!(
-        body,
-        format!(
-            "--codex-realtime-call-boundary\r\n\
-             Content-Disposition: form-data; name=\"sdp\"\r\n\
-             Content-Type: application/sdp\r\n\
-             \r\n\
-             v=offer\r\n\
-             \r\n\
-             --codex-realtime-call-boundary\r\n\
-             Content-Disposition: form-data; name=\"session\"\r\n\
-             Content-Type: application/json\r\n\
-             \r\n\
-             {session}\r\n\
-             --codex-realtime-call-boundary--\r\n"
-        )
-    );
+    assert_call_create_multipart(call_capture.single_request(), "v=offer\r\n", session)?;
 
     realtime_server.shutdown().await;
     Ok(())
@@ -2018,23 +1991,40 @@ fn assert_call_create_multipart(
         Some("multipart/form-data; boundary=codex-realtime-call-boundary")
     );
     let body = String::from_utf8(request.body).context("multipart body should be utf-8")?;
-    assert_eq!(
-        body,
-        format!(
-            "--codex-realtime-call-boundary\r\n\
-             Content-Disposition: form-data; name=\"sdp\"\r\n\
+    let (actual_sdp, actual_session) = parse_realtime_call_multipart(&body)?;
+    assert_eq!(actual_sdp, offer_sdp);
+
+    let actual_session_json =
+        serde_json::from_str::<Value>(actual_session).context("session part should be JSON")?;
+    let expected_session_json =
+        serde_json::from_str::<Value>(session).context("expected session should be JSON")?;
+    assert_eq!(actual_session_json, expected_session_json);
+    Ok(())
+}
+
+fn parse_realtime_call_multipart(body: &str) -> Result<(&str, &str)> {
+    let body = body
+        .strip_prefix("--codex-realtime-call-boundary\r\n")
+        .context("multipart body should start with boundary")?;
+    let body = body
+        .strip_prefix(
+            "Content-Disposition: form-data; name=\"sdp\"\r\n\
              Content-Type: application/sdp\r\n\
-             \r\n\
-             {offer_sdp}\r\n\
-             --codex-realtime-call-boundary\r\n\
+             \r\n",
+        )
+        .context("multipart body should start with sdp part")?;
+    let (sdp, body) = body
+        .split_once(
+            "\r\n--codex-realtime-call-boundary\r\n\
              Content-Disposition: form-data; name=\"session\"\r\n\
              Content-Type: application/json\r\n\
-             \r\n\
-             {session}\r\n\
-             --codex-realtime-call-boundary--\r\n"
+             \r\n",
         )
-    );
-    Ok(())
+        .context("multipart body should include session part")?;
+    let session = body
+        .strip_suffix("\r\n--codex-realtime-call-boundary--\r\n")
+        .context("multipart body should end with closing boundary")?;
+    Ok((sdp, session))
 }
 
 fn v1_session_create_json() -> &'static str {

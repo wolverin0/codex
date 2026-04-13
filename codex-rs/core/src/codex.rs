@@ -4902,7 +4902,6 @@ mod handlers {
     use crate::codex::spawn_review_thread;
     use crate::config::Config;
     use crate::config_loader::CloudRequirementsLoader;
-    use crate::config_loader::LoaderOverrides;
     use crate::config_loader::load_config_layers_state;
     use crate::realtime_context::REALTIME_TURN_TOKEN_BUDGET;
     use crate::realtime_context::truncate_realtime_text_to_token_budget;
@@ -5414,7 +5413,7 @@ mod handlers {
                 &codex_home,
                 Some(cwd_abs.clone()),
                 empty_cli_overrides,
-                LoaderOverrides::default(),
+                config.loader_overrides.clone(),
                 CloudRequirementsLoader::default(),
             )
             .await

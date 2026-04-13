@@ -253,7 +253,11 @@ async fn skills_changed_notification_is_emitted_after_skill_change() -> Result<(
     let codex_home = TempDir::new()?;
     write_skill(&codex_home, "demo")?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = McpProcess::new_with_env(
+        codex_home.path(),
+        &[("CODEX_FILE_WATCHER_BACKEND", Some("poll"))],
+    )
+    .await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
     let thread_start_request_id = mcp
         .send_thread_start_request(ThreadStartParams {
@@ -288,16 +292,25 @@ async fn skills_changed_notification_is_emitted_after_skill_change() -> Result<(
         .join("skills")
         .join("demo")
         .join("SKILL.md");
-    std::fs::write(
-        &skill_path,
-        "---\nname: demo\ndescription: updated\n---\n\n# Updated\n",
-    )?;
+    let writer = tokio::spawn(async move {
+        // Give platform file watchers repeated chances to observe the change
+        // after the app-server registers the skills root.
+        for attempt in 0..200 {
+            let content =
+                format!("---\nname: demo\ndescription: updated {attempt}\n---\n\n# Updated\n");
+            std::fs::write(&skill_path, content)?;
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        Ok::<(), std::io::Error>(())
+    });
 
-    let notification = timeout(
+    let notification_result = timeout(
         WATCHER_TIMEOUT,
         mcp.read_stream_until_notification_message("skills/changed"),
     )
-    .await??;
+    .await;
+    writer.abort();
+    let notification = notification_result??;
     let params = notification
         .params
         .context("skills/changed params must be present")?;

@@ -40,11 +40,7 @@ struct AppServerArgs {
 fn main() -> anyhow::Result<()> {
     arg0_dispatch_or_else(|arg0_paths: Arg0DispatchPaths| async move {
         let args = AppServerArgs::parse();
-        let managed_config_path = managed_config_path_from_debug_env();
-        let loader_overrides = LoaderOverrides {
-            managed_config_path,
-            ..Default::default()
-        };
+        let loader_overrides = loader_overrides_from_debug_env();
         let transport = args.listen;
         let session_source = args.session_source;
         let auth = args.auth.try_into_settings()?;
@@ -63,17 +59,23 @@ fn main() -> anyhow::Result<()> {
     })
 }
 
-fn managed_config_path_from_debug_env() -> Option<PathBuf> {
+fn loader_overrides_from_debug_env() -> LoaderOverrides {
+    let mut loader_overrides = LoaderOverrides::default();
+
     #[cfg(debug_assertions)]
     {
         if let Ok(value) = std::env::var(MANAGED_CONFIG_PATH_ENV_VAR) {
-            return if value.is_empty() {
-                None
+            let managed_config_path = if value.is_empty() {
+                std::env::temp_dir()
+                    .join("codex-app-server-tests")
+                    .join("managed_config.toml")
             } else {
-                Some(PathBuf::from(value))
+                PathBuf::from(value)
             };
+            loader_overrides =
+                LoaderOverrides::with_managed_config_path_for_tests(managed_config_path);
         }
     }
 
-    None
+    loader_overrides
 }

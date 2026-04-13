@@ -2941,7 +2941,7 @@ class SkillSummary(BaseModel):
     enabled: bool
     interface: SkillInterface | None = None
     name: str
-    path: str
+    path: AbsolutePathBuf
     short_description: Annotated[str | None, Field(alias="shortDescription")] = None
 
 
@@ -3365,6 +3365,11 @@ class ThreadLoadedListResponse(BaseModel):
             description="Opaque cursor to pass to the next call to continue after the last item. if None, there are no more items to return.",
         ),
     ] = None
+
+
+class ThreadMemoryMode(Enum):
+    enabled = "enabled"
+    disabled = "disabled"
 
 
 class ThreadMetadataGitInfoUpdateParams(BaseModel):
@@ -5590,7 +5595,7 @@ class SkillMetadata(BaseModel):
     enabled: bool
     interface: SkillInterface | None = None
     name: str
-    path: str
+    path: AbsolutePathBuf
     scope: SkillScope
     short_description: Annotated[
         str | None,

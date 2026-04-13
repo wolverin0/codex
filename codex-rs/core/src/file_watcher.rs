@@ -12,8 +12,10 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+use notify::Config as NotifyConfig;
 use notify::Event;
 use notify::EventKind;
+use notify::PollWatcher;
 use notify::RecommendedWatcher;
 use notify::RecursiveMode;
 use notify::Watcher;
@@ -24,6 +26,10 @@ use tokio::sync::mpsc;
 use tokio::time::Instant;
 use tokio::time::sleep_until;
 use tracing::warn;
+
+const FILE_WATCHER_BACKEND_ENV_VAR: &str = "CODEX_FILE_WATCHER_BACKEND";
+const FILE_WATCHER_BACKEND_POLL: &str = "poll";
+const POLL_WATCHER_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Coalesced file change notification for a subscriber.
@@ -177,8 +183,41 @@ impl PathWatchCounts {
 }
 
 struct FileWatcherInner {
-    watcher: RecommendedWatcher,
+    watcher: WatcherBackend,
     watched_paths: HashMap<PathBuf, RecursiveMode>,
+}
+
+enum WatcherBackend {
+    Recommended(RecommendedWatcher),
+    Poll(PollWatcher),
+}
+
+impl WatcherBackend {
+    fn new<F>(event_handler: F) -> notify::Result<Self>
+    where
+        F: notify::EventHandler + Clone,
+    {
+        if std::env::var(FILE_WATCHER_BACKEND_ENV_VAR).as_deref() == Ok(FILE_WATCHER_BACKEND_POLL) {
+            let config = NotifyConfig::default().with_poll_interval(POLL_WATCHER_INTERVAL);
+            return PollWatcher::new(event_handler, config).map(Self::Poll);
+        }
+
+        notify::recommended_watcher(event_handler).map(Self::Recommended)
+    }
+
+    fn watch(&mut self, path: &Path, recursive_mode: RecursiveMode) -> notify::Result<()> {
+        match self {
+            Self::Recommended(watcher) => watcher.watch(path, recursive_mode),
+            Self::Poll(watcher) => watcher.watch(path, recursive_mode),
+        }
+    }
+
+    fn unwatch(&mut self, path: &Path) -> notify::Result<()> {
+        match self {
+            Self::Recommended(watcher) => watcher.unwatch(path),
+            Self::Poll(watcher) => watcher.unwatch(path),
+        }
+    }
 }
 
 /// Coalesces bursts of watch notifications and emits at most once per interval.
@@ -272,7 +311,7 @@ impl FileWatcher {
     pub fn new() -> notify::Result<Self> {
         let (raw_tx, raw_rx) = mpsc::unbounded_channel();
         let raw_tx_clone = raw_tx;
-        let watcher = notify::recommended_watcher(move |res| {
+        let watcher = WatcherBackend::new(move |res| {
             let _ = raw_tx_clone.send(res);
         })?;
         let inner = FileWatcherInner {

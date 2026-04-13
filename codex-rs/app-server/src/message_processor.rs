@@ -256,6 +256,7 @@ impl MessageProcessor {
             cli_overrides: cli_overrides.clone(),
             runtime_feature_enablement: runtime_feature_enablement.clone(),
             cloud_requirements: cloud_requirements.clone(),
+            loader_overrides: loader_overrides.clone(),
             feedback,
             log_db,
         });

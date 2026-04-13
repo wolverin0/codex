@@ -220,6 +220,13 @@ pub struct Config {
     /// requirements).
     pub config_layer_stack: ConfigLayerStack,
 
+    /// Loader inputs used to derive this [`Config`].
+    ///
+    /// Components that reload configuration during a session must reuse these
+    /// overrides so test and embedded environments do not accidentally fall
+    /// back to host-managed configuration sources.
+    pub loader_overrides: LoaderOverrides,
+
     /// Warnings collected during config load that should be shown on startup.
     pub startup_warnings: Vec<String>,
 
@@ -696,7 +703,7 @@ impl ConfigBuilder {
             &codex_home,
             Some(cwd),
             &cli_overrides,
-            loader_overrides,
+            loader_overrides.clone(),
             cloud_requirements,
         )
         .await?;
@@ -721,12 +728,14 @@ impl ConfigBuilder {
                 return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, err));
             }
         };
-        Config::load_config_with_layer_stack(
+        let mut config = Config::load_config_with_layer_stack(
             config_toml,
             harness_overrides,
             codex_home,
             config_layer_stack,
-        )
+        )?;
+        config.loader_overrides = loader_overrides;
+        Ok(config)
     }
 
     #[cfg(test)]
@@ -2004,6 +2013,7 @@ impl Config {
                 NetworkSandboxPolicy::from(&effective_sandbox_policy)
             };
         let config = Self {
+            loader_overrides: LoaderOverrides::default(),
             model,
             service_tier,
             review_model,
