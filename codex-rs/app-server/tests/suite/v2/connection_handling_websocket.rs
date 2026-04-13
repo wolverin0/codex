@@ -2,6 +2,7 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::bail;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
+use app_test_support::managed_config_test_override_path;
 use app_test_support::to_response;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -48,6 +49,7 @@ use tokio_tungstenite::tungstenite::http::header::AUTHORIZATION;
 use tokio_tungstenite::tungstenite::http::header::ORIGIN;
 
 pub(super) const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
+const WEBSOCKET_SERVER_START_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub(super) type WsClient = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 type HmacSha256 = Hmac<Sha256>;
@@ -388,6 +390,10 @@ pub(super) async fn spawn_websocket_server_with_args(
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .env("CODEX_HOME", codex_home)
+        .env(
+            "CODEX_APP_SERVER_MANAGED_CONFIG_PATH",
+            managed_config_test_override_path(codex_home),
+        )
         .env("RUST_LOG", "debug");
     let mut process = cmd
         .kill_on_drop(true)
@@ -399,7 +405,7 @@ pub(super) async fn spawn_websocket_server_with_args(
         .take()
         .context("failed to capture websocket app-server stderr")?;
     let mut stderr_reader = BufReader::new(stderr).lines();
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + WEBSOCKET_SERVER_START_TIMEOUT;
     let bind_addr = loop {
         let line = timeout(
             deadline.saturating_duration_since(Instant::now()),
