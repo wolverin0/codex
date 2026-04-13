@@ -562,6 +562,69 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn date_locale_time_string_formats_with_icu_data() {
+        let service = CodeModeService::new();
+
+        let response = service
+            .execute(ExecuteRequest {
+                source: r#"
+const value = new Date("2025-01-02T03:04:05Z")
+  .toLocaleTimeString("en-US", { hour12: false, timeZone: "UTC" });
+text(value);
+"#
+                .to_string(),
+                yield_time_ms: None,
+                ..execute_request("")
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response,
+            RuntimeResponse::Result {
+                cell_id: "1".to_string(),
+                content_items: vec![FunctionCallOutputContentItem::InputText {
+                    text: "03:04:05".to_string(),
+                }],
+                stored_values: HashMap::new(),
+                error_text: None,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn intl_date_time_format_constructs_with_icu_data() {
+        let service = CodeModeService::new();
+
+        let response = service
+            .execute(ExecuteRequest {
+                source: r#"
+new Intl.DateTimeFormat(void 0, {
+  timeZone: "America/Los_Angeles",
+});
+text("ok");
+"#
+                .to_string(),
+                yield_time_ms: None,
+                ..execute_request("")
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response,
+            RuntimeResponse::Result {
+                cell_id: "1".to_string(),
+                content_items: vec![FunctionCallOutputContentItem::InputText {
+                    text: "ok".to_string(),
+                }],
+                stored_values: HashMap::new(),
+                error_text: None,
+            }
+        );
+    }
+
+    #[tokio::test]
     async fn output_helpers_return_undefined() {
         let service = CodeModeService::new();
 
