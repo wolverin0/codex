@@ -107,26 +107,6 @@ async fn run_add(args: AddMarketplaceArgs) -> Result<()> {
     })?;
     let install_metadata =
         metadata::MarketplaceInstallMetadata::from_source(&source, &sparse_paths);
-    if let Some(existing_root) = metadata::installed_marketplace_root_for_source(
-        &codex_home,
-        &install_root,
-        &install_metadata,
-    )? {
-        let marketplace_name = validate_marketplace_root(&existing_root).with_context(|| {
-            format!(
-                "failed to validate installed marketplace at {}",
-                existing_root.display()
-            )
-        })?;
-        record_added_marketplace(&codex_home, &marketplace_name, &install_metadata)?;
-        println!(
-            "Marketplace `{marketplace_name}` is already added from {}.",
-            source.display()
-        );
-        println!("Installed marketplace root: {}", existing_root.display());
-        return Ok(());
-    }
-
     let staging_root = ops::marketplace_staging_root(&install_root);
     fs::create_dir_all(&staging_root).with_context(|| {
         format!(
@@ -158,10 +138,15 @@ async fn run_add(args: AddMarketplaceArgs) -> Result<()> {
     let destination = install_root.join(safe_marketplace_dir_name(&marketplace_name)?);
     ensure_marketplace_destination_is_inside_install_root(&install_root, &destination)?;
     if destination.exists() {
-        bail!(
-            "marketplace `{marketplace_name}` is already added from a different source; remove it before adding {}",
-            source.display()
-        );
+        validate_marketplace_root(&destination).with_context(|| {
+            format!(
+                "failed to validate installed marketplace at {}",
+                destination.display()
+            )
+        })?;
+        println!("Marketplace `{marketplace_name}` is already added.");
+        println!("Installed marketplace root: {}", destination.display());
+        return Ok(());
     }
     ops::replace_marketplace_root(&staged_root, &destination)
         .with_context(|| format!("failed to install marketplace at {}", destination.display()))?;

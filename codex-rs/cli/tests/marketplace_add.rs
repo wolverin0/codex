@@ -1,6 +1,7 @@
 use anyhow::Result;
 use codex_config::CONFIG_TOML_FILE;
 use codex_core::plugins::marketplace_install_root;
+use pretty_assertions::assert_eq;
 use std::net::TcpListener;
 use std::net::TcpStream;
 use std::path::Path;
@@ -142,6 +143,53 @@ async fn marketplace_add_supports_manifest_url_source() -> Result<()> {
     assert_eq!(marketplace["source"].as_str(), Some(url.as_str()));
     let _ = server.kill();
     let _ = server.wait();
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn marketplace_add_detects_duplicates_by_marketplace_name() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let first_source = TempDir::new()?;
+    let second_source = TempDir::new()?;
+    write_marketplace_source(first_source.path(), "first source")?;
+    write_marketplace_source(second_source.path(), "second source")?;
+
+    codex_command(codex_home.path())?
+        .args([
+            "marketplace",
+            "add",
+            first_source.path().to_str().expect("utf-8 tempdir path"),
+        ])
+        .assert()
+        .success();
+
+    let duplicate = codex_command(codex_home.path())?
+        .args([
+            "marketplace",
+            "add",
+            second_source.path().to_str().expect("utf-8 tempdir path"),
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert!(String::from_utf8_lossy(&duplicate).contains("Marketplace `debug` is already added."));
+
+    let installed_root = marketplace_install_root(codex_home.path()).join("debug");
+    assert_eq!(
+        std::fs::read_to_string(installed_root.join("plugins/sample/marker.txt"))?,
+        "first source"
+    );
+
+    let config = read_user_config(codex_home.path())?;
+    let marketplace = marketplace_config(&config, "debug")?;
+    let expected_source = first_source.path().canonicalize()?.display().to_string();
+    assert_eq!(
+        marketplace["source"].as_str(),
+        Some(expected_source.as_str())
+    );
 
     Ok(())
 }
