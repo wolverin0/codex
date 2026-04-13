@@ -896,7 +896,10 @@ pub fn ev_apply_patch_shell_call_via_heredoc(call_id: &str, patch: &str) -> Valu
 }
 
 pub fn ev_apply_patch_shell_command_call_via_heredoc(call_id: &str, patch: &str) -> Value {
-    let args = serde_json::json!({ "command": format!("apply_patch <<'EOF'\n{patch}\nEOF\n") });
+    let args = serde_json::json!({
+        "command": format!("apply_patch <<'EOF'\n{patch}\nEOF\n"),
+        "timeout_ms": 30_000,
+    });
     let arguments = serde_json::to_string(&args).expect("serialize apply_patch arguments");
 
     ev_function_call(call_id, "shell_command", &arguments)
