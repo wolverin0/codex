@@ -12,6 +12,7 @@ use codex_core::plugins::validate_plugin_segment;
 use codex_utils_cli::CliConfigOverrides;
 use std::fs;
 use std::path::Path;
+use std::path::PathBuf;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
@@ -35,7 +36,8 @@ enum MarketplaceSubcommand {
 
 #[derive(Debug, Parser)]
 struct AddMarketplaceArgs {
-    /// Marketplace source. Supports owner/repo[@ref], HTTP(S) Git URLs, or SSH URLs.
+    /// Marketplace source. Supports owner/repo[@ref], HTTP(S) Git URLs, SSH URLs,
+    /// local filesystem paths, or direct marketplace.json URLs.
     source: String,
 
     /// Git ref to check out. Overrides any @ref or #ref suffix in SOURCE.
@@ -56,6 +58,12 @@ pub(super) enum MarketplaceSource {
     Git {
         url: String,
         ref_name: Option<String>,
+    },
+    Path {
+        path: PathBuf,
+    },
+    ManifestUrl {
+        url: String,
     },
 }
 
@@ -137,8 +145,7 @@ async fn run_add(args: AddMarketplaceArgs) -> Result<()> {
         })?;
     let staged_root = staged_dir.path().to_path_buf();
 
-    let MarketplaceSource::Git { url, ref_name } = &source;
-    ops::clone_git_source(url, ref_name.as_deref(), &sparse_paths, &staged_root)?;
+    stage_marketplace_source(&source, &sparse_paths, &staged_root).await?;
 
     let marketplace_name = validate_marketplace_source_root(&staged_root)
         .with_context(|| format!("failed to validate marketplace from {}", source.display()))?;
@@ -216,9 +223,19 @@ fn parse_marketplace_source(
     let ref_name = explicit_ref.or(parsed_ref);
 
     if looks_like_local_path(&base_source) {
-        bail!(
-            "local marketplace sources are not supported yet; use an HTTP(S) Git URL, SSH Git URL, or GitHub owner/repo"
-        );
+        if ref_name.is_some() {
+            bail!("--ref is only supported for git marketplace sources");
+        }
+        return Ok(MarketplaceSource::Path {
+            path: resolve_local_source_path(&base_source)?,
+        });
+    }
+
+    if looks_like_manifest_url(&base_source) {
+        if ref_name.is_some() {
+            bail!("--ref is only supported for git marketplace sources");
+        }
+        return Ok(MarketplaceSource::ManifestUrl { url: base_source });
     }
 
     if is_ssh_git_url(&base_source) || is_git_url(&base_source) {
@@ -268,6 +285,187 @@ fn looks_like_local_path(source: &str) -> bool {
         || source.starts_with("~/")
         || source == "."
         || source == ".."
+}
+
+fn looks_like_manifest_url(source: &str) -> bool {
+    if !is_git_url(source) {
+        return false;
+    }
+
+    let without_query = source.split('?').next().unwrap_or(source);
+    without_query
+        .trim_end_matches('/')
+        .ends_with("marketplace.json")
+}
+
+fn resolve_local_source_path(source: &str) -> Result<PathBuf> {
+    let path = expand_tilde_path(source);
+    let path = if path.is_absolute() {
+        path
+    } else {
+        std::env::current_dir()
+            .context("failed to read current working directory for local marketplace source")?
+            .join(path)
+    };
+
+    path.canonicalize().with_context(|| {
+        format!(
+            "failed to resolve local marketplace source {}",
+            path.display()
+        )
+    })
+}
+
+fn expand_tilde_path(source: &str) -> PathBuf {
+    let Some(rest) = source.strip_prefix("~/") else {
+        return PathBuf::from(source);
+    };
+    let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) else {
+        return PathBuf::from(source);
+    };
+    PathBuf::from(home).join(rest)
+}
+
+async fn stage_marketplace_source(
+    source: &MarketplaceSource,
+    sparse_paths: &[String],
+    staged_root: &Path,
+) -> Result<()> {
+    if !sparse_paths.is_empty() && !matches!(source, MarketplaceSource::Git { .. }) {
+        bail!("--sparse is only supported for git marketplace sources");
+    }
+
+    match source {
+        MarketplaceSource::Git { url, ref_name } => {
+            ops::clone_git_source(url, ref_name.as_deref(), sparse_paths, staged_root)
+        }
+        MarketplaceSource::Path { path } => stage_local_source(path, staged_root),
+        MarketplaceSource::ManifestUrl { url } => {
+            download_manifest_url_source(url, staged_root).await
+        }
+    }
+}
+
+fn stage_local_source(source_path: &Path, staged_root: &Path) -> Result<()> {
+    let metadata = fs::metadata(source_path).with_context(|| {
+        format!(
+            "failed to read local marketplace source metadata {}",
+            source_path.display()
+        )
+    })?;
+
+    if metadata.is_dir() {
+        copy_dir_recursive(source_path, staged_root)?;
+        return Ok(());
+    }
+
+    if !metadata.is_file() {
+        bail!(
+            "local marketplace source must be a file or directory: {}",
+            source_path.display()
+        );
+    }
+
+    if let Some(marketplace_root) = marketplace_root_for_manifest_path(source_path) {
+        copy_dir_recursive(marketplace_root, staged_root)?;
+        return Ok(());
+    }
+
+    let staged_manifest_path = staged_root.join(".agents/plugins/marketplace.json");
+    if let Some(parent) = staged_manifest_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::copy(source_path, &staged_manifest_path).with_context(|| {
+        format!(
+            "failed to copy local marketplace manifest {} to {}",
+            source_path.display(),
+            staged_manifest_path.display()
+        )
+    })?;
+
+    Ok(())
+}
+
+fn marketplace_root_for_manifest_path(path: &Path) -> Option<&Path> {
+    let plugins_dir = path.parent()?;
+    let dot_agents_dir = plugins_dir.parent()?;
+    let marketplace_root = dot_agents_dir.parent()?;
+
+    (path.file_name().and_then(|name| name.to_str()) == Some("marketplace.json")
+        && plugins_dir.file_name().and_then(|name| name.to_str()) == Some("plugins")
+        && dot_agents_dir.file_name().and_then(|name| name.to_str()) == Some(".agents"))
+    .then_some(marketplace_root)
+}
+
+fn copy_dir_recursive(source: &Path, target: &Path) -> Result<()> {
+    fs::create_dir_all(target)?;
+
+    for entry in fs::read_dir(source).with_context(|| {
+        format!(
+            "failed to read local marketplace directory {}",
+            source.display()
+        )
+    })? {
+        let entry = entry.with_context(|| {
+            format!(
+                "failed to read local marketplace entry in {}",
+                source.display()
+            )
+        })?;
+        let source_path = entry.path();
+        let target_path = target.join(entry.file_name());
+        let file_type = entry.file_type().with_context(|| {
+            format!(
+                "failed to read file type for local marketplace entry {}",
+                source_path.display()
+            )
+        })?;
+
+        if file_type.is_dir() {
+            copy_dir_recursive(&source_path, &target_path)?;
+        } else if file_type.is_file() {
+            if let Some(parent) = target_path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::copy(&source_path, &target_path).with_context(|| {
+                format!(
+                    "failed to copy local marketplace file {} to {}",
+                    source_path.display(),
+                    target_path.display()
+                )
+            })?;
+        }
+    }
+
+    Ok(())
+}
+
+async fn download_manifest_url_source(url: &str, staged_root: &Path) -> Result<()> {
+    let response = reqwest::Client::new()
+        .get(url)
+        .send()
+        .await
+        .with_context(|| format!("failed to download marketplace manifest from {url}"))?;
+    let response = response
+        .error_for_status()
+        .with_context(|| format!("failed to download marketplace manifest from {url}"))?;
+    let contents = response
+        .bytes()
+        .await
+        .with_context(|| format!("failed to read downloaded marketplace manifest from {url}"))?;
+
+    let staged_manifest_path = staged_root.join(".agents/plugins/marketplace.json");
+    if let Some(parent) = staged_manifest_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(&staged_manifest_path, contents).with_context(|| {
+        format!(
+            "failed to write downloaded marketplace manifest to {}",
+            staged_manifest_path.display()
+        )
+    })?;
+
+    Ok(())
 }
 
 fn is_ssh_git_url(source: &str) -> bool {
@@ -386,6 +584,8 @@ impl MarketplaceSource {
                     url.clone()
                 }
             }
+            Self::Path { path } => path.display().to_string(),
+            Self::ManifestUrl { url } => url.clone(),
         }
     }
 }
@@ -493,12 +693,60 @@ mod tests {
     }
 
     #[test]
-    fn local_path_source_is_rejected() {
-        let err = parse_marketplace_source("./marketplace", /*explicit_ref*/ None).unwrap_err();
+    fn local_path_source_parses() {
+        let source = parse_marketplace_source(".", /*explicit_ref*/ None).unwrap();
+
+        let MarketplaceSource::Path { path } = source else {
+            panic!("expected local path source");
+        };
+        assert!(path.is_absolute());
+    }
+
+    #[test]
+    fn manifest_url_source_parses() {
+        assert_eq!(
+            parse_marketplace_source(
+                "https://example.com/.agents/plugins/marketplace.json",
+                /*explicit_ref*/ None,
+            )
+            .unwrap(),
+            MarketplaceSource::ManifestUrl {
+                url: "https://example.com/.agents/plugins/marketplace.json".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn non_git_sources_reject_ref_override() {
+        let err = parse_marketplace_source(
+            "./marketplace",
+            /*explicit_ref*/ Some("main".to_string()),
+        )
+        .unwrap_err();
 
         assert!(
             err.to_string()
-                .contains("local marketplace sources are not supported yet"),
+                .contains("--ref is only supported for git marketplace sources"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn non_git_sources_reject_sparse_checkout() {
+        let Ok(path) = std::env::current_dir() else {
+            panic!("failed to read current working directory");
+        };
+        let err = stage_marketplace_source(
+            &MarketplaceSource::Path { path },
+            &["plugins/foo".to_string()],
+            Path::new("/tmp"),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("--sparse is only supported for git marketplace sources"),
             "unexpected error: {err}"
         );
     }

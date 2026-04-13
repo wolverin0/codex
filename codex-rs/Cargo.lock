@@ -1701,6 +1701,7 @@ dependencies = [
  "predicates",
  "pretty_assertions",
  "regex-lite",
+ "reqwest",
  "serde_json",
  "sqlx",
  "supports-color 3.0.2",
