@@ -2595,7 +2595,7 @@ impl SessionSource {
         })
     }
 
-    /// Coarse-grained source classification used for analytics.
+    /// Low cardinality thread source label for analytics.
     pub fn thread_source_name(&self) -> Option<&'static str> {
         match self {
             SessionSource::Cli | SessionSource::VSCode | SessionSource::Exec => Some("user"),
