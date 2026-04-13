@@ -53,6 +53,7 @@ use tracing_test::traced_test;
 
 const MODEL: &str = "gpt-5.2-codex";
 const OPENAI_BETA_HEADER: &str = "OpenAI-Beta";
+const USER_AGENT_HEADER: &str = "user-agent";
 const WS_V2_BETA_HEADER_VALUE: &str = "responses_websockets=2026-02-06";
 const X_CLIENT_REQUEST_ID_HEADER: &str = "x-client-request-id";
 const TEST_INSTALLATION_ID: &str = "11111111-1111-4111-8111-111111111111";
@@ -80,6 +81,14 @@ fn assert_request_trace_matches(body: &serde_json::Value, expected_trace: &W3cTr
     assert!(
         body.get("trace").is_none(),
         "top-level trace should not be sent"
+    );
+}
+
+fn assert_request_user_agent(body: &serde_json::Value) {
+    let expected_user_agent = codex_login::default_client::get_codex_user_agent();
+    assert_eq!(
+        body["client_metadata"][USER_AGENT_HEADER].as_str(),
+        Some(expected_user_agent.as_str())
     );
 }
 
@@ -127,9 +136,14 @@ async fn responses_websocket_streams_request() {
         Some(harness.conversation_id.to_string())
     );
     assert_eq!(
+        handshake.header(USER_AGENT_HEADER),
+        Some(codex_login::default_client::get_codex_user_agent())
+    );
+    assert_eq!(
         body["client_metadata"]["x-codex-installation-id"].as_str(),
         Some(TEST_INSTALLATION_ID)
     );
+    assert_request_user_agent(&body);
 
     server.shutdown().await;
 }
@@ -197,6 +211,10 @@ async fn responses_websocket_reuses_connection_with_per_turn_trace_payloads() {
     };
 
     assert_eq!(server.handshakes().len(), 1);
+    assert_eq!(
+        server.single_handshake().header(USER_AGENT_HEADER),
+        Some(codex_login::default_client::get_codex_user_agent())
+    );
     let connection = server.single_connection();
     assert_eq!(connection.len(), 2);
 
@@ -210,6 +228,8 @@ async fn responses_websocket_reuses_connection_with_per_turn_trace_payloads() {
         .body_json();
     assert_request_trace_matches(&first_request, &first_trace);
     assert_request_trace_matches(&second_request, &second_trace);
+    assert_request_user_agent(&first_request);
+    assert_request_user_agent(&second_request);
 
     let first_traceparent = first_request["client_metadata"]
         [WS_REQUEST_HEADER_TRACEPARENT_CLIENT_METADATA_KEY]
@@ -282,7 +302,14 @@ async fn responses_websocket_preconnect_reuses_connection() {
     stream_until_complete(&mut client_session, &harness, &prompt).await;
 
     assert_eq!(server.handshakes().len(), 1);
-    assert_eq!(server.single_connection().len(), 1);
+    assert_eq!(
+        server.single_handshake().header(USER_AGENT_HEADER),
+        Some(codex_login::default_client::get_codex_user_agent())
+    );
+    let connection = server.single_connection();
+    assert_eq!(connection.len(), 1);
+    let body = connection.first().expect("missing request").body_json();
+    assert_request_user_agent(&body);
 
     server.shutdown().await;
 }
@@ -315,6 +342,10 @@ async fn responses_websocket_request_prewarm_reuses_connection() {
     stream_until_complete(&mut client_session, &harness, &prompt).await;
 
     assert_eq!(server.handshakes().len(), 1);
+    assert_eq!(
+        server.single_handshake().header(USER_AGENT_HEADER),
+        Some(codex_login::default_client::get_codex_user_agent())
+    );
     let connection = server.single_connection();
     assert_eq!(connection.len(), 2);
     let warmup = connection
@@ -329,9 +360,11 @@ async fn responses_websocket_request_prewarm_reuses_connection() {
     assert_eq!(warmup["type"].as_str(), Some("response.create"));
     assert_eq!(warmup["generate"].as_bool(), Some(false));
     assert_eq!(warmup["tools"], serde_json::json!([]));
+    assert_request_user_agent(&warmup);
     assert_eq!(follow_up["type"].as_str(), Some("response.create"));
     assert_eq!(follow_up["previous_response_id"].as_str(), Some("warm-1"));
     assert_eq!(follow_up["input"], serde_json::json!([]));
+    assert_request_user_agent(&follow_up);
 
     server.shutdown().await;
 }
@@ -1144,6 +1177,23 @@ async fn responses_websocket_connection_limit_error_reconnects_and_completes() {
 
     let total_websocket_requests: usize = server.connections().iter().map(Vec::len).sum();
     assert_eq!(total_websocket_requests, 2);
+    for connection in server.connections() {
+        for request in connection {
+            assert_request_user_agent(&request.body_json());
+        }
+    }
+    let handshake_user_agents: Vec<_> = server
+        .handshakes()
+        .iter()
+        .map(|handshake| handshake.header(USER_AGENT_HEADER))
+        .collect();
+    assert_eq!(
+        handshake_user_agents,
+        vec![
+            Some(codex_login::default_client::get_codex_user_agent()),
+            Some(codex_login::default_client::get_codex_user_agent()),
+        ]
+    );
 
     server.shutdown().await;
 }

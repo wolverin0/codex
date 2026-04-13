@@ -84,6 +84,7 @@ use http::HeaderMap as ApiHeaderMap;
 use http::HeaderValue;
 use http::StatusCode as HttpStatusCode;
 use http::header::AUTHORIZATION;
+use http::header::USER_AGENT;
 use reqwest::StatusCode;
 use std::time::Duration;
 use std::time::Instant;
@@ -585,6 +586,10 @@ impl ModelClient {
             X_CODEX_WINDOW_ID_HEADER.to_string(),
             self.current_window_id(),
         );
+        client_metadata.insert(
+            USER_AGENT.as_str().to_string(),
+            codex_login::default_client::get_codex_user_agent(),
+        );
         if let Some(subagent) = subagent_header_value(&self.state.session_source) {
             client_metadata.insert(X_OPENAI_SUBAGENT_HEADER.to_string(), subagent);
         }
@@ -699,12 +704,18 @@ impl ModelClient {
             self.state.auth_env_telemetry.clone(),
         );
         let websocket_connect_timeout = self.state.provider.websocket_connect_timeout();
+        let mut default_headers = codex_login::default_client::default_headers();
+        if let Ok(user_agent) =
+            HeaderValue::from_str(&codex_login::default_client::get_codex_user_agent())
+        {
+            default_headers.insert(USER_AGENT, user_agent);
+        }
         let start = Instant::now();
         let result = match tokio::time::timeout(
             websocket_connect_timeout,
             ApiWebSocketResponsesClient::new(api_provider, api_auth).connect(
                 headers,
-                codex_login::default_client::default_headers(),
+                default_headers,
                 turn_state,
                 Some(websocket_telemetry),
             ),

@@ -118,6 +118,10 @@ fn build_ws_client_metadata_includes_window_lineage_and_turn_metadata() {
                 format!("{conversation_id}:1"),
             ),
             (
+                http::header::USER_AGENT.as_str().to_string(),
+                codex_login::default_client::get_codex_user_agent(),
+            ),
+            (
                 X_OPENAI_SUBAGENT_HEADER.to_string(),
                 "collab_spawn".to_string(),
             ),
