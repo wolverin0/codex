@@ -55,6 +55,9 @@ use codex_features::FeatureOverrides;
 use codex_features::Features;
 use codex_login::AuthManagerConfig;
 use codex_mcp::McpConfig;
+use codex_model_provider::ProviderResolutionPolicy;
+use codex_model_provider::ProviderRuntime;
+use codex_model_provider::resolve_model_provider;
 use codex_model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::OLLAMA_CHAT_PROVIDER_REMOVED_ERROR;
@@ -213,6 +216,9 @@ pub struct Config {
 
     /// Info needed to make an API request to the model.
     pub model_provider: ModelProviderInfo,
+
+    /// Runtime provider strategy. This remains legacy unless explicitly opted in.
+    pub provider_runtime: ProviderRuntime,
 
     /// Optionally specify the personality of the model
     pub personality: Option<Personality>,
@@ -1641,6 +1647,11 @@ impl Config {
                 std::io::Error::new(std::io::ErrorKind::NotFound, message)
             })?
             .clone();
+        let provider_runtime = resolve_model_provider(
+            &model_provider_id,
+            &model_provider,
+            &ProviderResolutionPolicy::disabled(),
+        );
 
         let shell_environment_policy = cfg.shell_environment_policy.into();
         let allow_login_shell = cfg.allow_login_shell.unwrap_or(true);
@@ -1930,6 +1941,7 @@ impl Config {
             model_auto_compact_token_limit: cfg.model_auto_compact_token_limit,
             model_provider_id,
             model_provider,
+            provider_runtime,
             cwd: resolved_cwd,
             startup_warnings,
             permissions: Permissions {
