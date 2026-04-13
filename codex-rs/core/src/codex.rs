@@ -189,6 +189,7 @@ use crate::environment_context::EnvironmentContext;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::types::McpServerConfig;
 use codex_config::types::ShellEnvironmentPolicy;
+use codex_model_provider::ProviderRuntime;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
@@ -636,6 +637,7 @@ impl Codex {
         };
         let session_configuration = SessionConfiguration {
             provider: config.model_provider.clone(),
+            provider_runtime: config.provider_runtime.clone(),
             collaboration_mode,
             model_reasoning_summary: config.model_reasoning_summary,
             service_tier: config.service_tier,
@@ -1097,6 +1099,7 @@ fn local_time_context() -> (String, String) {
 pub(crate) struct SessionConfiguration {
     /// Provider identifier ("openai", "openrouter", ...).
     provider: ModelProviderInfo,
+    provider_runtime: ProviderRuntime,
 
     collaboration_mode: CollaborationMode,
     model_reasoning_summary: Option<ReasoningSummaryConfig>,
@@ -1974,6 +1977,7 @@ impl Session {
                 conversation_id,
                 installation_id,
                 session_configuration.provider.clone(),
+                session_configuration.provider_runtime.clone(),
                 session_configuration.session_source.clone(),
                 config.model_verbosity,
                 config.features.enabled(Feature::EnableRequestCompression),

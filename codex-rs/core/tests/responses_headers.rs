@@ -5,6 +5,7 @@ use codex_core::ModelClient;
 use codex_core::Prompt;
 use codex_core::ResponseEvent;
 use codex_login::CodexAuth;
+use codex_model_provider::ProviderRuntime;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
 use codex_otel::SessionTelemetry;
@@ -102,6 +103,7 @@ async fn responses_stream_includes_subagent_header_on_review() {
         conversation_id,
         /*installation_id*/ TEST_INSTALLATION_ID.to_string(),
         provider.clone(),
+        ProviderRuntime::Legacy,
         session_source,
         config.model_verbosity,
         /*enable_request_compression*/ false,
@@ -227,6 +229,7 @@ async fn responses_stream_includes_subagent_header_on_other() {
         conversation_id,
         /*installation_id*/ TEST_INSTALLATION_ID.to_string(),
         provider.clone(),
+        ProviderRuntime::Legacy,
         session_source,
         config.model_verbosity,
         /*enable_request_compression*/ false,
@@ -341,6 +344,7 @@ async fn responses_respects_model_info_overrides_from_config() {
         conversation_id,
         /*installation_id*/ TEST_INSTALLATION_ID.to_string(),
         provider.clone(),
+        ProviderRuntime::Legacy,
         session_source,
         config.model_verbosity,
         /*enable_request_compression*/ false,

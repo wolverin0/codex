@@ -257,6 +257,7 @@ fn test_model_client_session() -> crate::client::ModelClientSession {
             .expect("test thread id should be valid"),
         /*installation_id*/ "11111111-1111-4111-8111-111111111111".to_string(),
         ModelProviderInfo::create_openai_provider(/* base_url */ /*base_url*/ None),
+        codex_model_provider::ProviderRuntime::Legacy,
         codex_protocol::protocol::SessionSource::Exec,
         /*model_verbosity*/ None,
         /*enable_request_compression*/ false,
@@ -1851,6 +1852,7 @@ async fn set_rate_limits_retains_previous_credits() {
     };
     let session_configuration = SessionConfiguration {
         provider: config.model_provider.clone(),
+        provider_runtime: config.provider_runtime.clone(),
         collaboration_mode,
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
@@ -1954,6 +1956,7 @@ async fn set_rate_limits_updates_plan_type_when_present() {
     };
     let session_configuration = SessionConfiguration {
         provider: config.model_provider.clone(),
+        provider_runtime: config.provider_runtime.clone(),
         collaboration_mode,
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
@@ -2305,6 +2308,7 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
 
     SessionConfiguration {
         provider: config.model_provider.clone(),
+        provider_runtime: config.provider_runtime.clone(),
         collaboration_mode,
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
@@ -2569,6 +2573,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
     };
     let session_configuration = SessionConfiguration {
         provider: config.model_provider.clone(),
+        provider_runtime: config.provider_runtime.clone(),
         collaboration_mode,
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
@@ -2673,6 +2678,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     };
     let session_configuration = SessionConfiguration {
         provider: config.model_provider.clone(),
+        provider_runtime: config.provider_runtime.clone(),
         collaboration_mode,
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
@@ -2772,6 +2778,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             conversation_id,
             /*installation_id*/ "11111111-1111-4111-8111-111111111111".to_string(),
             session_configuration.provider.clone(),
+            session_configuration.provider_runtime.clone(),
             session_configuration.session_source.clone(),
             config.model_verbosity,
             config.features.enabled(Feature::EnableRequestCompression),
@@ -3515,6 +3522,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
     };
     let session_configuration = SessionConfiguration {
         provider: config.model_provider.clone(),
+        provider_runtime: config.provider_runtime.clone(),
         collaboration_mode,
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
@@ -3614,6 +3622,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
             conversation_id,
             /*installation_id*/ "11111111-1111-4111-8111-111111111111".to_string(),
             session_configuration.provider.clone(),
+            session_configuration.provider_runtime.clone(),
             session_configuration.session_source.clone(),
             config.model_verbosity,
             config.features.enabled(Feature::EnableRequestCompression),

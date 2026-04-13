@@ -103,9 +103,12 @@ use codex_api::map_api_error;
 use codex_feedback::FeedbackRequestTags;
 use codex_feedback::emit_feedback_request_tags_with_auth_env;
 use codex_login::api_bridge::auth_provider_from_auth;
+use codex_login::api_bridge::auth_provider_from_runtime;
 use codex_login::auth_env_telemetry::AuthEnvTelemetry;
 use codex_login::auth_env_telemetry::collect_auth_env_telemetry;
-use codex_login::provider_auth::auth_manager_for_provider;
+use codex_login::provider_auth::auth_manager_for_provider_runtime;
+use codex_model_provider::ProviderRuntime;
+use codex_model_provider::ResolvedModelProvider;
 #[cfg(test)]
 use codex_model_provider_info::DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS;
 use codex_model_provider_info::ModelProviderInfo;
@@ -145,6 +148,7 @@ struct ModelClientState {
     window_generation: AtomicU64,
     installation_id: String,
     provider: ModelProviderInfo,
+    provider_runtime: ProviderRuntime,
     auth_env_telemetry: AuthEnvTelemetry,
     session_source: SessionSource,
     model_verbosity: Option<VerbosityConfig>,
@@ -267,17 +271,24 @@ impl ModelClient {
         conversation_id: ThreadId,
         installation_id: String,
         provider: ModelProviderInfo,
+        provider_runtime: ProviderRuntime,
         session_source: SessionSource,
         model_verbosity: Option<VerbosityConfig>,
         enable_request_compression: bool,
         include_timing_metrics: bool,
         beta_features_header: Option<String>,
     ) -> Self {
-        let auth_manager = auth_manager_for_provider(auth_manager, &provider);
+        let auth_manager =
+            auth_manager_for_provider_runtime(auth_manager, &provider_runtime, &provider);
         let codex_api_key_env_enabled = auth_manager
             .as_ref()
             .is_some_and(|manager| manager.codex_api_key_env_enabled());
-        let auth_env_telemetry = collect_auth_env_telemetry(&provider, codex_api_key_env_enabled);
+        let auth_env_provider = match &provider_runtime {
+            ProviderRuntime::Legacy => &provider,
+            ProviderRuntime::Resolved(provider) => &provider.info,
+        };
+        let auth_env_telemetry =
+            collect_auth_env_telemetry(auth_env_provider, codex_api_key_env_enabled);
         Self {
             state: Arc::new(ModelClientState {
                 auth_manager,
@@ -285,6 +296,7 @@ impl ModelClient {
                 window_generation: AtomicU64::new(0),
                 installation_id,
                 provider,
+                provider_runtime,
                 auth_env_telemetry,
                 session_source,
                 model_verbosity,
@@ -610,11 +622,40 @@ impl ModelClient {
             Some(manager) => manager.auth().await,
             None => None,
         };
+
+        match &self.state.provider_runtime {
+            ProviderRuntime::Legacy => self.current_client_setup_legacy(auth),
+            ProviderRuntime::Resolved(provider) => {
+                self.current_client_setup_resolved(auth, provider)
+            }
+        }
+    }
+
+    fn current_client_setup_legacy(&self, auth: Option<CodexAuth>) -> Result<CurrentClientSetup> {
         let api_provider = self
             .state
             .provider
             .to_api_provider(auth.as_ref().map(CodexAuth::auth_mode))?;
         let api_auth = auth_provider_from_auth(auth.clone(), &self.state.provider)?;
+        Ok(CurrentClientSetup {
+            auth,
+            api_provider,
+            api_auth,
+        })
+    }
+
+    fn current_client_setup_resolved(
+        &self,
+        auth: Option<CodexAuth>,
+        provider: &ResolvedModelProvider,
+    ) -> Result<CurrentClientSetup> {
+        let api_provider =
+            provider.to_legacy_api_provider(auth.as_ref().map(CodexAuth::auth_mode))?;
+        let api_auth = auth_provider_from_runtime(
+            auth.clone(),
+            &self.state.provider_runtime,
+            &self.state.provider,
+        )?;
         Ok(CurrentClientSetup {
             auth,
             api_provider,

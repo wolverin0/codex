@@ -8,6 +8,7 @@ use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::default_client::originator;
+use codex_model_provider::ProviderRuntime;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
 use codex_model_provider_info::built_in_model_providers;
@@ -777,7 +778,7 @@ async fn includes_conversation_id_and_model_headers_in_request() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn provider_auth_command_supplies_bearer_token() {
+async fn non_allowlisted_provider_auth_command_supplies_bearer_token() {
     skip_if_no_network!();
 
     let server = MockServer::start().await;
@@ -880,6 +881,7 @@ async fn send_provider_auth_request(server: &MockServer, auth: ModelProviderAuth
         conversation_id,
         /*installation_id*/ "11111111-1111-4111-8111-111111111111".to_string(),
         provider,
+        ProviderRuntime::Legacy,
         SessionSource::Exec,
         config.model_verbosity,
         /*enable_request_compression*/ false,
@@ -2199,6 +2201,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         conversation_id,
         /*installation_id*/ "11111111-1111-4111-8111-111111111111".to_string(),
         provider.clone(),
+        ProviderRuntime::Legacy,
         SessionSource::Exec,
         config.model_verbosity,
         /*enable_request_compression*/ false,

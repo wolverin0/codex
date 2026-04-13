@@ -9,6 +9,9 @@ use super::X_CODEX_WINDOW_ID_HEADER;
 use super::X_OPENAI_SUBAGENT_HEADER;
 use codex_api::CoreAuthProvider;
 use codex_app_server_protocol::AuthMode;
+use codex_model_provider::ProviderResolutionPolicy;
+use codex_model_provider::ProviderRuntime;
+use codex_model_provider::resolve_model_provider;
 use codex_model_provider_info::WireApi;
 use codex_model_provider_info::create_oss_provider_with_base_url;
 use codex_otel::SessionTelemetry;
@@ -26,6 +29,7 @@ fn test_model_client(session_source: SessionSource) -> ModelClient {
         ThreadId::new(),
         /*installation_id*/ "11111111-1111-4111-8111-111111111111".to_string(),
         provider,
+        ProviderRuntime::Legacy,
         session_source,
         /*model_verbosity*/ None,
         /*enable_request_compression*/ false,
@@ -77,6 +81,73 @@ fn test_session_telemetry() -> SessionTelemetry {
         "test-terminal".to_string(),
         SessionSource::Cli,
     )
+}
+
+#[tokio::test]
+async fn current_client_setup_non_allowlisted_env_key_provider_uses_env_bearer() {
+    let mut provider =
+        create_oss_provider_with_base_url("https://example.com/v1", WireApi::Responses);
+    provider.env_key = Some("PATH".to_string());
+    let expected_token = std::env::var("PATH").expect("PATH should be set for tests");
+    let client = ModelClient::new(
+        /*auth_manager*/ None,
+        ThreadId::new(),
+        /*installation_id*/ "11111111-1111-4111-8111-111111111111".to_string(),
+        provider,
+        ProviderRuntime::Legacy,
+        SessionSource::Cli,
+        /*model_verbosity*/ None,
+        /*enable_request_compression*/ false,
+        /*include_timing_metrics*/ false,
+        /*beta_features_header*/ None,
+    );
+
+    let setup = client
+        .current_client_setup()
+        .await
+        .expect("client setup should succeed");
+
+    assert_eq!(
+        setup.api_auth.token.as_deref(),
+        Some(expected_token.as_str())
+    );
+}
+
+#[tokio::test]
+async fn current_client_setup_uses_resolved_runtime_provider() {
+    let legacy_provider =
+        create_oss_provider_with_base_url("https://legacy.example.com/v1", WireApi::Responses);
+    let mut resolved_provider =
+        create_oss_provider_with_base_url("https://resolved.example.com/v1", WireApi::Responses);
+    resolved_provider.experimental_bearer_token = Some("resolved-token".to_string());
+    let runtime = resolve_model_provider(
+        "custom",
+        &resolved_provider,
+        &ProviderResolutionPolicy::with_enabled_provider_ids([String::from("custom")]),
+    );
+    let client = ModelClient::new(
+        /*auth_manager*/ None,
+        ThreadId::new(),
+        /*installation_id*/ "11111111-1111-4111-8111-111111111111".to_string(),
+        legacy_provider,
+        runtime,
+        SessionSource::Cli,
+        /*model_verbosity*/ None,
+        /*enable_request_compression*/ false,
+        /*include_timing_metrics*/ false,
+        /*beta_features_header*/ None,
+    );
+
+    let setup = client
+        .current_client_setup()
+        .await
+        .expect("client setup should succeed");
+
+    assert_eq!(
+        setup.api_provider.base_url,
+        "https://resolved.example.com/v1"
+    );
+    assert_eq!(setup.api_auth.token.as_deref(), Some("resolved-token"));
 }
 
 #[test]
