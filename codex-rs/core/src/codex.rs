@@ -1068,6 +1068,15 @@ impl TurnContext {
         }
     }
 
+    pub(crate) fn mcp_sandbox_state(&self) -> SandboxState {
+        SandboxState {
+            sandbox_policy: self.sandbox_policy.get().clone(),
+            codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.clone(),
+            sandbox_cwd: self.cwd.to_path_buf(),
+            use_legacy_landlock: self.features.use_legacy_landlock(),
+        }
+    }
+
     pub(crate) fn compact_prompt(&self) -> &str {
         self.compact_prompt
             .as_deref()
@@ -1209,6 +1218,21 @@ pub(crate) struct SessionConfiguration {
 impl SessionConfiguration {
     pub(crate) fn codex_home(&self) -> &PathBuf {
         &self.codex_home
+    }
+
+    fn mcp_sandbox_state(&self) -> SandboxState {
+        SandboxState {
+            sandbox_policy: self.sandbox_policy.get().clone(),
+            codex_linux_sandbox_exe: self
+                .original_config_do_not_use
+                .codex_linux_sandbox_exe
+                .clone(),
+            sandbox_cwd: self.cwd.to_path_buf(),
+            use_legacy_landlock: self
+                .original_config_do_not_use
+                .features
+                .use_legacy_landlock(),
+        }
     }
 
     fn thread_config_snapshot(&self) -> ThreadConfigSnapshot {
@@ -2150,14 +2174,6 @@ impl Session {
 
         // Start the watcher after SessionConfigured so it cannot emit earlier events.
         sess.start_skills_watcher_listener();
-        // Construct sandbox_state before MCP startup so it can be sent to each
-        // MCP server immediately after it becomes ready (avoiding blocking).
-        let sandbox_state = SandboxState {
-            sandbox_policy: session_configuration.sandbox_policy.get().clone(),
-            codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
-            sandbox_cwd: session_configuration.cwd.to_path_buf(),
-            use_legacy_landlock: config.features.use_legacy_landlock(),
-        };
         let mut required_mcp_servers: Vec<String> = mcp_servers
             .iter()
             .filter(|(_, server)| server.enabled && server.required)
@@ -2167,6 +2183,7 @@ impl Session {
         let enabled_mcp_server_count = mcp_servers.values().filter(|server| server.enabled).count();
         let required_mcp_server_count = required_mcp_servers.len();
         let tool_plugin_provenance = mcp_manager.tool_plugin_provenance(config.as_ref());
+        let sandbox_state = session_configuration.mcp_sandbox_state();
         {
             let mut cancel_guard = sess.services.mcp_startup_cancellation_token.lock().await;
             cancel_guard.cancel();
@@ -4437,8 +4454,41 @@ impl Session {
         server: &str,
         tool: &str,
         arguments: Option<serde_json::Value>,
-        meta: Option<serde_json::Value>,
+        mut meta: Option<serde_json::Value>,
     ) -> anyhow::Result<CallToolResult> {
+        let supports_sandbox_state_meta = self
+            .services
+            .mcp_connection_manager
+            .read()
+            .await
+            .server_supports_sandbox_state_meta_capability(server)
+            .await
+            .unwrap_or(false);
+        if supports_sandbox_state_meta {
+            let sandbox_state = {
+                let state = self.state.lock().await;
+                state.session_configuration.mcp_sandbox_state()
+            };
+            let sandbox_state = serde_json::to_value(sandbox_state)?;
+            match meta.as_mut() {
+                Some(serde_json::Value::Object(map)) => {
+                    map.insert(
+                        codex_mcp::MCP_SANDBOX_STATE_META_CAPABILITY.to_string(),
+                        sandbox_state,
+                    );
+                }
+                Some(_) => {}
+                None => {
+                    let mut map = serde_json::Map::new();
+                    map.insert(
+                        codex_mcp::MCP_SANDBOX_STATE_META_CAPABILITY.to_string(),
+                        sandbox_state,
+                    );
+                    meta = Some(serde_json::Value::Object(map));
+                }
+            }
+        }
+
         self.services
             .mcp_connection_manager
             .read()
@@ -4513,12 +4563,7 @@ impl Session {
             .tool_plugin_provenance(config.as_ref());
         let mcp_servers = with_codex_apps_mcp(mcp_servers, auth.as_ref(), &mcp_config);
         let auth_statuses = compute_auth_statuses(mcp_servers.iter(), store_mode).await;
-        let sandbox_state = SandboxState {
-            sandbox_policy: turn_context.sandbox_policy.get().clone(),
-            codex_linux_sandbox_exe: turn_context.codex_linux_sandbox_exe.clone(),
-            sandbox_cwd: turn_context.cwd.to_path_buf(),
-            use_legacy_landlock: turn_context.features.use_legacy_landlock(),
-        };
+        let sandbox_state = turn_context.mcp_sandbox_state();
         {
             let mut guard = self.services.mcp_startup_cancellation_token.lock().await;
             guard.cancel();

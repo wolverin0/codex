@@ -433,6 +433,7 @@ struct ManagedClient {
     tool_timeout: Option<Duration>,
     server_instructions: Option<String>,
     server_supports_sandbox_state_capability: bool,
+    server_supports_sandbox_state_meta_capability: bool,
     codex_apps_tools_cache_context: Option<CodexAppsToolsCacheContext>,
 }
 
@@ -476,6 +477,10 @@ impl ManagedClient {
             )
             .await?;
         Ok(())
+    }
+
+    fn supports_sandbox_state_meta_capability(&self) -> bool {
+        self.server_supports_sandbox_state_meta_capability
     }
 }
 
@@ -646,6 +651,7 @@ pub const MCP_SANDBOX_STATE_CAPABILITY: &str = "codex/sandbox-state";
 /// Custom MCP request to push sandbox state updates.
 /// When used, the `params` field of the notification is [`SandboxState`].
 pub const MCP_SANDBOX_STATE_METHOD: &str = "codex/sandbox-state/update";
+pub const MCP_SANDBOX_STATE_META_CAPABILITY: &str = "codex/sandbox-state-meta";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -783,7 +789,6 @@ impl McpConnectionManager {
                 }
                 let status = match &outcome {
                     Ok(_) => {
-                        // Send sandbox state notification immediately after Ready
                         if let Err(e) = async_managed_client
                             .notify_sandbox_state_change(&sandbox_state)
                             .await
@@ -1142,6 +1147,44 @@ impl McpConnectionManager {
         })
     }
 
+    pub async fn server_supports_sandbox_state_meta_capability(
+        &self,
+        server: &str,
+    ) -> Result<bool> {
+        Ok(self
+            .client_by_name(server)
+            .await?
+            .supports_sandbox_state_meta_capability())
+    }
+
+    pub async fn notify_sandbox_state_change(&self, sandbox_state: &SandboxState) -> Result<()> {
+        let mut join_set = JoinSet::new();
+
+        for async_managed_client in self.clients.values() {
+            let sandbox_state = sandbox_state.clone();
+            let async_managed_client = async_managed_client.clone();
+            join_set.spawn(async move {
+                async_managed_client
+                    .notify_sandbox_state_change(&sandbox_state)
+                    .await
+            });
+        }
+
+        while let Some(join_res) = join_set.join_next().await {
+            match join_res {
+                Ok(Ok(())) => {}
+                Ok(Err(err)) => {
+                    warn!("Failed to notify sandbox state change to MCP server: {err:#}");
+                }
+                Err(err) => {
+                    warn!("Task panic when notifying sandbox state change to MCP server: {err:#}");
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     /// List resources from the specified server.
     pub async fn list_resources(
         &self,
@@ -1199,34 +1242,6 @@ impl McpConnectionManager {
         };
 
         self.list_all_tools().await.get(&qualified_name).cloned()
-    }
-
-    pub async fn notify_sandbox_state_change(&self, sandbox_state: &SandboxState) -> Result<()> {
-        let mut join_set = JoinSet::new();
-
-        for async_managed_client in self.clients.values() {
-            let sandbox_state = sandbox_state.clone();
-            let async_managed_client = async_managed_client.clone();
-            join_set.spawn(async move {
-                async_managed_client
-                    .notify_sandbox_state_change(&sandbox_state)
-                    .await
-            });
-        }
-
-        while let Some(join_res) = join_set.join_next().await {
-            match join_res {
-                Ok(Ok(())) => {}
-                Ok(Err(err)) => {
-                    warn!("Failed to notify sandbox state change to MCP server: {err:#}");
-                }
-                Err(err) => {
-                    warn!("Task panic when notifying sandbox state change to MCP server: {err:#}");
-                }
-            }
-        }
-
-        Ok(())
     }
 }
 
@@ -1473,11 +1488,12 @@ async fn start_server_task(
         .await
         .map_err(StartupOutcomeError::from)?;
 
-    let server_supports_sandbox_state_capability = initialize_result
-        .capabilities
-        .experimental
-        .as_ref()
+    let experimental_capabilities = initialize_result.capabilities.experimental.as_ref();
+    let server_supports_sandbox_state_capability = experimental_capabilities
         .and_then(|exp| exp.get(MCP_SANDBOX_STATE_CAPABILITY))
+        .is_some();
+    let server_supports_sandbox_state_meta_capability = experimental_capabilities
+        .and_then(|exp| exp.get(MCP_SANDBOX_STATE_META_CAPABILITY))
         .is_some();
     let list_start = Instant::now();
     let fetch_start = Instant::now();
@@ -1515,6 +1531,7 @@ async fn start_server_task(
         tool_filter,
         server_instructions: initialize_result.instructions,
         server_supports_sandbox_state_capability,
+        server_supports_sandbox_state_meta_capability,
         codex_apps_tools_cache_context,
     };
 

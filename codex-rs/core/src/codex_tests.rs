@@ -2624,6 +2624,7 @@ async fn session_configuration_apply_rederives_legacy_file_system_policy_on_cwd_
     );
 }
 
+#[tokio::test]
 async fn build_per_turn_config_uses_current_session_sandbox_policy() {
     let mut session_configuration = make_session_configuration_for_tests().await;
     let workspace = tempfile::tempdir().expect("create temp dir");

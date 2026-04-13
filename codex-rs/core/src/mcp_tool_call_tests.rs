@@ -559,9 +559,13 @@ async fn mcp_tool_call_request_meta_includes_turn_metadata_for_custom_server() {
     )
     .expect("turn metadata json");
 
-    let meta =
-        build_mcp_tool_call_request_meta(&turn_context, "custom_server", /*metadata*/ None)
-            .expect("custom servers should receive turn metadata");
+    let meta = build_mcp_tool_call_request_meta(
+        &turn_context,
+        "custom_server",
+        /*metadata*/ None,
+        /*include_sandbox_state*/ false,
+    )
+    .expect("custom servers should receive turn metadata");
 
     assert_eq!(
         meta,
@@ -606,6 +610,7 @@ async fn codex_apps_tool_call_request_meta_includes_turn_metadata_and_codex_apps
             &turn_context,
             CODEX_APPS_MCP_SERVER_NAME,
             Some(&metadata),
+            /*include_sandbox_state*/ false,
         ),
         Some(serde_json::json!({
             crate::X_CODEX_TURN_METADATA_HEADER: expected_turn_metadata,
@@ -615,6 +620,24 @@ async fn codex_apps_tool_call_request_meta_includes_turn_metadata_and_codex_apps
                 "connector_id": "calendar",
             },
         }))
+    );
+}
+
+#[tokio::test]
+async fn mcp_tool_call_request_meta_includes_sandbox_state_when_requested() {
+    let (_, turn_context) = make_session_and_context().await;
+
+    let meta = build_mcp_tool_call_request_meta(
+        &turn_context,
+        "custom_server",
+        /*metadata*/ None,
+        /*include_sandbox_state*/ true,
+    )
+    .expect("custom servers should receive request metadata");
+
+    assert_eq!(
+        meta.get(codex_mcp::MCP_SANDBOX_STATE_META_CAPABILITY),
+        Some(&serde_json::to_value(turn_context.mcp_sandbox_state()).expect("sandbox state")),
     );
 }
 

@@ -37,6 +37,7 @@ use codex_analytics::build_track_events_context;
 use codex_config::types::AppToolApproval;
 use codex_features::Feature;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
+use codex_mcp::MCP_SANDBOX_STATE_META_CAPABILITY;
 use codex_mcp::declared_openai_file_input_param_names;
 use codex_mcp::mcp_permission_prompt_is_auto_approved;
 use codex_otel::sanitize_metric_tag_value;
@@ -142,8 +143,20 @@ pub(crate) async fn handle_mcp_tool_call(
         );
         return CallToolResult::from_result(result);
     }
-    let request_meta =
-        build_mcp_tool_call_request_meta(turn_context.as_ref(), &server, metadata.as_ref());
+    let supports_sandbox_state_meta = sess
+        .services
+        .mcp_connection_manager
+        .read()
+        .await
+        .server_supports_sandbox_state_meta_capability(&server)
+        .await
+        .unwrap_or(false);
+    let request_meta = build_mcp_tool_call_request_meta(
+        turn_context.as_ref(),
+        &server,
+        metadata.as_ref(),
+        supports_sandbox_state_meta,
+    );
     let connector_id = metadata
         .as_ref()
         .and_then(|metadata| metadata.connector_id.clone());
@@ -623,6 +636,7 @@ fn build_mcp_tool_call_request_meta(
     turn_context: &TurnContext,
     server: &str,
     metadata: Option<&McpToolApprovalMetadata>,
+    include_sandbox_state: bool,
 ) -> Option<serde_json::Value> {
     let mut request_meta = serde_json::Map::new();
 
@@ -640,6 +654,14 @@ fn build_mcp_tool_call_request_meta(
         request_meta.insert(
             MCP_TOOL_CODEX_APPS_META_KEY.to_string(),
             serde_json::Value::Object(codex_apps_meta),
+        );
+    }
+
+    if include_sandbox_state {
+        request_meta.insert(
+            MCP_SANDBOX_STATE_META_CAPABILITY.to_string(),
+            serde_json::to_value(turn_context.mcp_sandbox_state())
+                .expect("sandbox state should serialize"),
         );
     }
 
