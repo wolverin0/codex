@@ -2266,10 +2266,12 @@ dependencies = [
  "codex-client",
  "codex-config",
  "codex-keyring-store",
+ "codex-model-provider",
  "codex-model-provider-info",
  "codex-otel",
  "codex-protocol",
  "codex-terminal-detection",
+ "codex-utils-absolute-path",
  "codex-utils-template",
  "core_test_support",
  "keyring",
@@ -2359,12 +2361,13 @@ dependencies = [
 name = "codex-model-provider"
 version = "0.0.0"
 dependencies = [
+ "codex-api",
+ "codex-app-server-protocol",
  "codex-model-provider-info",
  "codex-protocol",
  "codex-utils-absolute-path",
  "pretty_assertions",
  "serde",
- "url",
 ]
 
 [[package]]

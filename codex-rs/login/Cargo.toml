@@ -16,6 +16,7 @@ codex-api = { workspace = true }
 codex-client = { workspace = true }
 codex-config = { workspace = true }
 codex-keyring-store = { workspace = true }
+codex-model-provider = { workspace = true }
 codex-model-provider-info = { workspace = true }
 codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
@@ -44,6 +45,7 @@ webbrowser = { workspace = true }
 
 [dev-dependencies]
 anyhow = { workspace = true }
+codex-utils-absolute-path = { workspace = true }
 core_test_support = { workspace = true }
 keyring = { workspace = true }
 pretty_assertions = { workspace = true }

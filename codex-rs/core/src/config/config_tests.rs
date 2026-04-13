@@ -291,6 +291,26 @@ command = "print-token"
 }
 
 #[test]
+fn provider_framework_config_allowlist_does_not_enable_runtime() -> std::io::Result<()> {
+    let cfg = toml::from_str::<ConfigToml>(
+        r#"
+[experimental_provider_framework]
+enabled_model_providers = ["openai"]
+"#,
+    )
+    .expect("unknown provider framework config should not fail to deserialize");
+
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        tempdir()?.abs().into_path_buf(),
+    )?;
+
+    assert_eq!(config.provider_runtime, ProviderRuntime::Legacy);
+    Ok(())
+}
+
+#[test]
 fn config_toml_deserializes_model_availability_nux() {
     let toml = r#"
 [tui.model_availability_nux]

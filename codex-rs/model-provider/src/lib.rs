@@ -6,12 +6,18 @@
 
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
+use codex_protocol::error::Result as CodexResult;
 use codex_protocol::openai_models::ModelsResponse;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashSet;
 use std::time::Duration;
-use url::Url;
+
+/// Provider IDs opted in to the runtime provider framework in production.
+///
+/// This is intentionally code-owned rather than user-configurable. Leaving it
+/// empty preserves legacy behavior for every provider.
+pub const PROVIDER_FRAMEWORK_ENABLED_PROVIDER_IDS: &[&str] = &[];
 
 /// Runtime strategy selected for the active model provider.
 #[derive(Debug, Clone, PartialEq)]
@@ -37,6 +43,17 @@ pub struct ResolvedModelProvider {
     pub model_catalog: ProviderModelCatalog,
     pub transport: ProviderTransport,
     pub capabilities: ProviderCapabilities,
+}
+
+impl ResolvedModelProvider {
+    /// Build the legacy API provider for resolved providers that deliberately
+    /// mirror existing OpenAI-compatible behavior.
+    pub fn to_legacy_api_provider(
+        &self,
+        auth_mode: Option<codex_app_server_protocol::AuthMode>,
+    ) -> CodexResult<codex_api::Provider> {
+        self.info.to_api_provider(auth_mode)
+    }
 }
 
 /// Provider-owned authentication strategy.
@@ -68,7 +85,7 @@ pub enum ProviderModelCatalog {
 /// Provider-owned transport metadata.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProviderTransport {
-    pub base_url: Option<Url>,
+    pub base_url: Option<String>,
     pub wire_api: WireApi,
     pub request_timeout: Option<Duration>,
     pub supports_websockets: bool,
@@ -127,22 +144,51 @@ impl ProviderResolutionPolicy {
         }
     }
 
+    pub fn from_static_provider_ids(provider_ids: &'static [&'static str]) -> Self {
+        Self {
+            enabled_provider_ids: provider_ids.iter().map(|id| (*id).to_string()).collect(),
+        }
+    }
+
     pub fn enables_provider(&self, provider_id: &str) -> bool {
         self.enabled_provider_ids.contains(provider_id)
     }
 }
 
+pub fn production_provider_resolution_policy() -> ProviderResolutionPolicy {
+    ProviderResolutionPolicy::from_static_provider_ids(PROVIDER_FRAMEWORK_ENABLED_PROVIDER_IDS)
+}
+
 /// Resolve the config-facing provider into a runtime strategy.
-///
-/// This first PR intentionally keeps all providers on the legacy path. The
-/// policy is accepted now so later PRs can add real opt-in resolution without
-/// changing callsites again.
 pub fn resolve_model_provider(
-    _provider_id: &str,
-    _provider: &ModelProviderInfo,
-    _policy: &ProviderResolutionPolicy,
+    provider_id: &str,
+    provider: &ModelProviderInfo,
+    policy: &ProviderResolutionPolicy,
 ) -> ProviderRuntime {
-    ProviderRuntime::Legacy
+    if !policy.enables_provider(provider_id) {
+        return ProviderRuntime::Legacy;
+    }
+
+    ProviderRuntime::Resolved(resolve_generic_model_provider(provider_id, provider))
+}
+
+fn resolve_generic_model_provider(
+    provider_id: &str,
+    provider: &ModelProviderInfo,
+) -> ResolvedModelProvider {
+    ResolvedModelProvider {
+        id: provider_id.to_string(),
+        info: provider.clone(),
+        auth: ProviderAuthKind::Legacy,
+        model_catalog: ProviderModelCatalog::Legacy,
+        transport: ProviderTransport {
+            base_url: provider.base_url.clone(),
+            wire_api: provider.wire_api,
+            request_timeout: None,
+            supports_websockets: provider.supports_websockets,
+        },
+        capabilities: ProviderCapabilities::legacy_current_behavior(),
+    }
 }
 
 #[cfg(test)]
@@ -237,7 +283,26 @@ mod tests {
     }
 
     #[test]
-    fn enabled_policy_is_recorded_but_does_not_activate_framework_yet() {
+    fn production_policy_keeps_known_providers_on_legacy_runtime() {
+        let providers =
+            codex_model_provider_info::built_in_model_providers(/*openai_base_url*/ None);
+        let policy = production_provider_resolution_policy();
+
+        for provider_id in [
+            OPENAI_PROVIDER_ID,
+            OLLAMA_OSS_PROVIDER_ID,
+            LMSTUDIO_OSS_PROVIDER_ID,
+        ] {
+            let provider = providers.get(provider_id).expect("provider should exist");
+            assert_eq!(
+                resolve_model_provider(provider_id, provider, &policy),
+                ProviderRuntime::Legacy
+            );
+        }
+    }
+
+    #[test]
+    fn enabled_policy_activates_generic_resolved_provider() {
         let providers =
             codex_model_provider_info::built_in_model_providers(/*openai_base_url*/ None);
         let provider = providers
@@ -247,9 +312,44 @@ mod tests {
             ProviderResolutionPolicy::with_enabled_provider_ids([OPENAI_PROVIDER_ID.to_string()]);
 
         assert!(policy.enables_provider(OPENAI_PROVIDER_ID));
+        let runtime = resolve_model_provider(OPENAI_PROVIDER_ID, provider, &policy);
+        let ProviderRuntime::Resolved(resolved) = runtime else {
+            panic!("enabled provider should resolve through the provider framework");
+        };
+        assert_eq!(resolved.id, OPENAI_PROVIDER_ID);
+        assert_eq!(resolved.info, *provider);
+        assert_eq!(resolved.auth, ProviderAuthKind::Legacy);
+        assert_eq!(resolved.model_catalog, ProviderModelCatalog::Legacy);
         assert_eq!(
-            resolve_model_provider(OPENAI_PROVIDER_ID, provider, &policy),
-            ProviderRuntime::Legacy
+            resolved.capabilities,
+            ProviderCapabilities::legacy_current_behavior()
         );
+    }
+
+    #[test]
+    fn generic_resolved_provider_uses_legacy_api_provider_adapter() {
+        let providers =
+            codex_model_provider_info::built_in_model_providers(/*openai_base_url*/ None);
+        let provider = providers
+            .get(OPENAI_PROVIDER_ID)
+            .expect("provider should exist");
+        let policy =
+            ProviderResolutionPolicy::with_enabled_provider_ids([OPENAI_PROVIDER_ID.to_string()]);
+        let ProviderRuntime::Resolved(resolved) =
+            resolve_model_provider(OPENAI_PROVIDER_ID, provider, &policy)
+        else {
+            panic!("enabled provider should resolve through the provider framework");
+        };
+
+        let legacy = provider.to_api_provider(None).expect("legacy provider");
+        let resolved = resolved
+            .to_legacy_api_provider(None)
+            .expect("resolved provider");
+
+        assert_eq!(resolved.name, legacy.name);
+        assert_eq!(resolved.base_url, legacy.base_url);
+        assert_eq!(resolved.query_params, legacy.query_params);
+        assert_eq!(resolved.headers, legacy.headers);
+        assert_eq!(resolved.stream_idle_timeout, legacy.stream_idle_timeout);
     }
 }

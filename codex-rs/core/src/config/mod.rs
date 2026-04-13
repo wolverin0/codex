@@ -55,8 +55,8 @@ use codex_features::FeatureOverrides;
 use codex_features::Features;
 use codex_login::AuthManagerConfig;
 use codex_mcp::McpConfig;
-use codex_model_provider::ProviderResolutionPolicy;
 use codex_model_provider::ProviderRuntime;
+use codex_model_provider::production_provider_resolution_policy;
 use codex_model_provider::resolve_model_provider;
 use codex_model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
@@ -1650,7 +1650,7 @@ impl Config {
         let provider_runtime = resolve_model_provider(
             &model_provider_id,
             &model_provider,
-            &ProviderResolutionPolicy::disabled(),
+            &production_provider_resolution_policy(),
         );
 
         let shell_environment_policy = cfg.shell_environment_policy.into();
