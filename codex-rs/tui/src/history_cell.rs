@@ -1403,11 +1403,7 @@ impl HistoryCell for SessionHeaderHistoryCell {
             truncate_line_with_ellipsis_if_overflow(Line::from(spans), inner_width)
         };
 
-         let model_label = format!(
-            "{model_label:<label_width$}",
-            model_label = MODEL_LABEL,
-            label_width = label_width
-        );
+        let model_label = format!("{MODEL_LABEL:<label_width$}");
         let reasoning_label = self.reasoning_label();
         let model_spans: Vec<Span<'static>> = {
             let mut spans = vec![
