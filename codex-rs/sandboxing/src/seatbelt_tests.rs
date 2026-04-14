@@ -52,6 +52,20 @@ fn seatbelt_policy_arg(args: &[String]) -> &str {
         .expect("seatbelt args should include policy text")
 }
 
+fn writable_root_policy_component(root_param: &str, read_only_subpath_count: usize) -> String {
+    if read_only_subpath_count == 0 {
+        return format!("(subpath (param \"{root_param}\"))");
+    }
+
+    let mut require_parts = vec![format!("(subpath (param \"{root_param}\"))")];
+    for index in 0..read_only_subpath_count {
+        require_parts.push(format!(
+            "(require-not (subpath (param \"{root_param}_RO_{index}\")))"
+        ));
+    }
+    format!("(require-all {} )", require_parts.join(" "))
+}
+
 #[test]
 fn base_policy_allows_node_cpu_sysctls() {
     assert!(
@@ -128,22 +142,44 @@ fn explicit_unreadable_paths_are_excluded_from_full_disk_read_and_write_access()
     let policy = seatbelt_policy_arg(&args);
     let unreadable_roots = file_system_policy.get_unreadable_roots_with_cwd(Path::new("/"));
     let unreadable_root = unreadable_roots.first().expect("expected unreadable root");
+    let readable_carveout_param = args
+        .iter()
+        .find_map(|arg| {
+            arg.strip_prefix("-DREADABLE_ROOT_0_RO_")
+                .and_then(|rest| rest.split_once('='))
+                .filter(|(_, value)| *value == unreadable_root.display().to_string())
+                .map(|(index, _)| format!("READABLE_ROOT_0_RO_{index}"))
+        })
+        .expect("expected read carveout parameter");
+    let writable_carveout_param = args
+        .iter()
+        .find_map(|arg| {
+            arg.strip_prefix("-DWRITABLE_ROOT_0_RO_")
+                .and_then(|rest| rest.split_once('='))
+                .filter(|(_, value)| *value == unreadable_root.display().to_string())
+                .map(|(index, _)| format!("WRITABLE_ROOT_0_RO_{index}"))
+        })
+        .expect("expected write carveout parameter");
     assert!(
-        policy.contains("(require-not (subpath (param \"READABLE_ROOT_0_RO_0\")))"),
+        policy.contains(&format!(
+            "(require-not (subpath (param \"{readable_carveout_param}\")))"
+        )),
         "expected read carveout in policy:\n{policy}"
     );
     assert!(
-        policy.contains("(require-not (subpath (param \"WRITABLE_ROOT_0_RO_0\")))"),
+        policy.contains(&format!(
+            "(require-not (subpath (param \"{writable_carveout_param}\")))"
+        )),
         "expected write carveout in policy:\n{policy}"
     );
     assert!(
         args.iter()
-            .any(|arg| arg == &format!("-DREADABLE_ROOT_0_RO_0={}", unreadable_root.display())),
+            .any(|arg| arg == &format!("-D{readable_carveout_param}={}", unreadable_root.display())),
         "expected read carveout parameter in args: {args:#?}"
     );
     assert!(
         args.iter()
-            .any(|arg| arg == &format!("-DWRITABLE_ROOT_0_RO_0={}", unreadable_root.display())),
+            .any(|arg| arg == &format!("-D{writable_carveout_param}={}", unreadable_root.display())),
         "expected write carveout parameter in args: {args:#?}"
     );
 }
@@ -315,10 +351,6 @@ fn seatbelt_legacy_workspace_write_nested_readable_root_stays_writable() {
     );
 
     let docs_param = format!("-DWRITABLE_ROOT_0_RO_0={}", docs.as_path().display());
-    assert!(
-        !seatbelt_policy_arg(&args).contains("WRITABLE_ROOT_0_RO_0"),
-        "legacy workspace-write readable roots under cwd should not become seatbelt carveouts:\n{args:#?}"
-    );
     assert!(
         !args.iter().any(|arg| arg == &docs_param),
         "unexpected seatbelt carveout parameter for redundant legacy readable root: {args:#?}"
@@ -597,7 +629,7 @@ fn create_seatbelt_args_full_network_with_proxy_is_still_proxy_only() {
 #[test]
 fn create_seatbelt_args_with_read_only_git_and_codex_subpaths() {
     // Create a temporary workspace with two writable roots: one containing
-    // top-level .git and .codex directories and one without them.
+    // top-level .git and .codex directories and one without reserved paths.
     let tmp = TempDir::new().expect("tempdir");
     let PopulatedTmp {
         vulnerable_root,
@@ -609,6 +641,14 @@ fn create_seatbelt_args_with_read_only_git_and_codex_subpaths() {
     } = populate_tmpdir(tmp.path());
     let cwd = tmp.path().join("cwd");
     fs::create_dir_all(&cwd).expect("create cwd");
+    let cwd_canonical = cwd.canonicalize().expect("canonicalize cwd");
+    let cwd_dot_git = cwd_canonical.join(".git");
+    let cwd_dot_agents = cwd_canonical.join(".agents");
+    let cwd_dot_codex = cwd_canonical.join(".codex");
+    let vulnerable_dot_agents = vulnerable_root_canonical.join(".agents");
+    let empty_root_dot_git = empty_root_canonical.join(".git");
+    let empty_root_dot_agents = empty_root_canonical.join(".agents");
+    let empty_root_dot_codex = empty_root_canonical.join(".codex");
 
     // Build a policy that only includes the two test roots as writable and
     // does not automatically include defaults TMPDIR or /tmp.
@@ -651,13 +691,13 @@ fn create_seatbelt_args_with_read_only_git_and_codex_subpaths() {
     // Note that the policy includes:
     // - the base policy,
     // - read-only access to the filesystem,
-    // - write access to WRITABLE_ROOT_0 (but not its .git or .codex), WRITABLE_ROOT_1, and cwd as WRITABLE_ROOT_2.
+    // - write access to each writable root except for its reserved subpaths.
     let expected_policy = format!(
         r#"{MACOS_SEATBELT_BASE_POLICY}
 ; allow read-only file operations
 (allow file-read*)
 (allow file-write*
-(subpath (param "WRITABLE_ROOT_0")) (require-all (subpath (param "WRITABLE_ROOT_1")) (require-not (subpath (param "WRITABLE_ROOT_1_RO_0"))) (require-not (subpath (param "WRITABLE_ROOT_1_RO_1"))) ) (subpath (param "WRITABLE_ROOT_2"))
+{} {} {}
 )
 
 ; macOS permission profile extensions
@@ -668,17 +708,21 @@ fn create_seatbelt_args_with_read_only_git_and_codex_subpaths() {
     (local-name "com.apple.cfprefsd.agent"))
 (allow user-preference-read)
 "#,
+        writable_root_policy_component("WRITABLE_ROOT_0", 3),
+        writable_root_policy_component("WRITABLE_ROOT_1", 3),
+        writable_root_policy_component("WRITABLE_ROOT_2", 3),
     );
 
     assert_eq!(seatbelt_policy_arg(&args), expected_policy);
 
     let expected_definitions = [
+        format!("-DWRITABLE_ROOT_0={}", cwd_canonical.to_string_lossy()),
+        format!("-DWRITABLE_ROOT_0_RO_0={}", cwd_dot_git.to_string_lossy()),
         format!(
-            "-DWRITABLE_ROOT_0={}",
-            cwd.canonicalize()
-                .expect("canonicalize cwd")
-                .to_string_lossy()
+            "-DWRITABLE_ROOT_0_RO_1={}",
+            cwd_dot_agents.to_string_lossy()
         ),
+        format!("-DWRITABLE_ROOT_0_RO_2={}", cwd_dot_codex.to_string_lossy()),
         format!(
             "-DWRITABLE_ROOT_1={}",
             vulnerable_root_canonical.to_string_lossy()
@@ -689,11 +733,27 @@ fn create_seatbelt_args_with_read_only_git_and_codex_subpaths() {
         ),
         format!(
             "-DWRITABLE_ROOT_1_RO_1={}",
+            vulnerable_dot_agents.to_string_lossy()
+        ),
+        format!(
+            "-DWRITABLE_ROOT_1_RO_2={}",
             dot_codex_canonical.to_string_lossy()
         ),
         format!(
             "-DWRITABLE_ROOT_2={}",
             empty_root_canonical.to_string_lossy()
+        ),
+        format!(
+            "-DWRITABLE_ROOT_2_RO_0={}",
+            empty_root_dot_git.to_string_lossy()
+        ),
+        format!(
+            "-DWRITABLE_ROOT_2_RO_1={}",
+            empty_root_dot_agents.to_string_lossy()
+        ),
+        format!(
+            "-DWRITABLE_ROOT_2_RO_2={}",
+            empty_root_dot_codex.to_string_lossy()
         ),
     ];
     for expected_definition in expected_definitions {
@@ -930,6 +990,7 @@ fn create_seatbelt_args_for_cwd_as_git_repo() {
         dot_codex_canonical,
         ..
     } = populate_tmpdir(tmp.path());
+    let vulnerable_dot_agents = vulnerable_root_canonical.join(".agents");
 
     // Build a policy that does not specify any writable_roots, but does
     // use the default ones (cwd and TMPDIR) and verifies the `.git` and
@@ -971,22 +1032,25 @@ fn create_seatbelt_args_for_cwd_as_git_repo() {
         .map(|p| p.to_string_lossy().to_string());
 
     let tempdir_policy_entry = if tmpdir_env_var.is_some() {
-        r#" (subpath (param "WRITABLE_ROOT_2"))"#
+        format!(" {}", writable_root_policy_component("WRITABLE_ROOT_2", 3))
     } else {
-        ""
+        String::new()
     };
+    let slash_tmp = PathBuf::from("/tmp")
+        .canonicalize()
+        .expect("canonicalize /tmp");
 
     // Build the expected policy text using a raw string for readability.
     // Note that the policy includes:
     // - the base policy,
     // - read-only access to the filesystem,
-    // - write access to WRITABLE_ROOT_0 (but not its .git or .codex), WRITABLE_ROOT_1, and cwd as WRITABLE_ROOT_2.
+    // - write access to each writable root except for its reserved subpaths.
     let expected_policy = format!(
         r#"{MACOS_SEATBELT_BASE_POLICY}
 ; allow read-only file operations
 (allow file-read*)
 (allow file-write*
-(require-all (subpath (param "WRITABLE_ROOT_0")) (require-not (subpath (param "WRITABLE_ROOT_0_RO_0"))) (require-not (subpath (param "WRITABLE_ROOT_0_RO_1"))) ) (subpath (param "WRITABLE_ROOT_1")){tempdir_policy_entry}
+{} {}{tempdir_policy_entry}
 )
 
 ; macOS permission profile extensions
@@ -997,6 +1061,8 @@ fn create_seatbelt_args_for_cwd_as_git_repo() {
     (local-name "com.apple.cfprefsd.agent"))
 (allow user-preference-read)
 "#,
+        writable_root_policy_component("WRITABLE_ROOT_0", 3),
+        writable_root_policy_component("WRITABLE_ROOT_1", 3),
     );
 
     let mut expected_args = vec![
@@ -1012,19 +1078,32 @@ fn create_seatbelt_args_for_cwd_as_git_repo() {
         ),
         format!(
             "-DWRITABLE_ROOT_0_RO_1={}",
-            dot_codex_canonical.to_string_lossy()
+            vulnerable_dot_agents.to_string_lossy()
         ),
         format!(
-            "-DWRITABLE_ROOT_1={}",
-            PathBuf::from("/tmp")
-                .canonicalize()
-                .expect("canonicalize /tmp")
-                .to_string_lossy()
+            "-DWRITABLE_ROOT_0_RO_2={}",
+            dot_codex_canonical.to_string_lossy()
+        ),
+        format!("-DWRITABLE_ROOT_1={}", slash_tmp.to_string_lossy()),
+        format!(
+            "-DWRITABLE_ROOT_1_RO_0={}",
+            slash_tmp.join(".git").to_string_lossy()
+        ),
+        format!(
+            "-DWRITABLE_ROOT_1_RO_1={}",
+            slash_tmp.join(".agents").to_string_lossy()
+        ),
+        format!(
+            "-DWRITABLE_ROOT_1_RO_2={}",
+            slash_tmp.join(".codex").to_string_lossy()
         ),
     ];
 
     if let Some(p) = tmpdir_env_var {
         expected_args.push(format!("-DWRITABLE_ROOT_2={p}"));
+        expected_args.push(format!("-DWRITABLE_ROOT_2_RO_0={p}/.git"));
+        expected_args.push(format!("-DWRITABLE_ROOT_2_RO_1={p}/.agents"));
+        expected_args.push(format!("-DWRITABLE_ROOT_2_RO_2={p}/.codex"));
     }
 
     expected_args.extend(

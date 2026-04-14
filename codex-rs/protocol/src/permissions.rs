@@ -1078,25 +1078,21 @@ fn default_read_only_subpaths_for_writable_root(
     // (file .git with gitdir pointer), and bare repos when the gitdir is the
     // writable root itself.
     let top_level_git_is_file = top_level_git.as_path().is_file();
-    let top_level_git_is_dir = top_level_git.as_path().is_dir();
-    if top_level_git_is_dir || top_level_git_is_file {
-        if top_level_git_is_file
-            && is_git_pointer_file(&top_level_git)
-            && let Some(gitdir) = resolve_gitdir_from_file(&top_level_git)
-        {
-            subpaths.push(gitdir);
-        }
-        subpaths.push(top_level_git);
+    if top_level_git_is_file
+        && is_git_pointer_file(&top_level_git)
+        && let Some(gitdir) = resolve_gitdir_from_file(&top_level_git)
+    {
+        subpaths.push(gitdir);
     }
+    subpaths.push(top_level_git);
 
-    // Make .agents/skills and .codex/config.toml and related files read-only
-    // to the agent, by default.
+    // Reserve .agents/skills and .codex/config.toml and related files even
+    // when the paths do not exist yet, so downstream sandboxes block
+    // creating them.
     for subdir in &[".agents", ".codex"] {
         #[allow(clippy::expect_used)]
         let top_level_codex = writable_root.join(subdir).expect("valid relative path");
-        if top_level_codex.as_path().is_dir() {
-            subpaths.push(top_level_codex);
-        }
+        subpaths.push(top_level_codex);
     }
 
     dedup_absolute_paths(subpaths, /*normalize_effective_paths*/ false)
@@ -1382,9 +1378,10 @@ mod tests {
 
         let writable_roots = policy.get_writable_roots_with_cwd(cwd.path());
         assert_eq!(writable_roots.len(), 1);
-        assert_eq!(
-            writable_roots[0].read_only_subpaths,
-            vec![expected_dot_codex]
+        assert!(
+            writable_roots[0]
+                .read_only_subpaths
+                .contains(&expected_dot_codex)
         );
         assert!(
             !writable_roots[0]
@@ -1435,9 +1432,10 @@ mod tests {
         let writable_roots = policy.get_writable_roots_with_cwd(cwd.path());
         assert_eq!(writable_roots.len(), 1);
         assert_eq!(writable_roots[0].root, expected_root);
-        assert_eq!(
-            writable_roots[0].read_only_subpaths,
-            vec![expected_linked_private]
+        assert!(
+            writable_roots[0]
+                .read_only_subpaths
+                .contains(&expected_linked_private)
         );
         assert!(
             !writable_roots[0]
@@ -1489,9 +1487,10 @@ mod tests {
         let writable_roots = policy.get_writable_roots_with_cwd(cwd.path());
         assert_eq!(writable_roots.len(), 1);
         assert_eq!(writable_roots[0].root, expected_root);
-        assert_eq!(
-            writable_roots[0].read_only_subpaths,
-            vec![expected_linked_private]
+        assert!(
+            writable_roots[0]
+                .read_only_subpaths
+                .contains(&expected_linked_private)
         );
         assert!(
             !writable_roots[0]
@@ -1533,7 +1532,11 @@ mod tests {
         let writable_roots = policy.get_writable_roots_with_cwd(cwd.path());
         assert_eq!(writable_roots.len(), 1);
         assert_eq!(writable_roots[0].root, expected_root);
-        assert_eq!(writable_roots[0].read_only_subpaths, vec![expected_alias]);
+        assert!(
+            writable_roots[0]
+                .read_only_subpaths
+                .contains(&expected_alias)
+        );
     }
 
     #[cfg(unix)]

@@ -1090,25 +1090,20 @@ fn default_read_only_subpaths_for_writable_root(
     // (file .git with gitdir pointer), and bare repos when the gitdir is the
     // writable root itself.
     let top_level_git_is_file = top_level_git.as_path().is_file();
-    let top_level_git_is_dir = top_level_git.as_path().is_dir();
-    if top_level_git_is_dir || top_level_git_is_file {
-        if top_level_git_is_file
-            && is_git_pointer_file(&top_level_git)
-            && let Some(gitdir) = resolve_gitdir_from_file(&top_level_git)
-        {
-            subpaths.push(gitdir);
-        }
-        subpaths.push(top_level_git);
+    if top_level_git_is_file
+        && is_git_pointer_file(&top_level_git)
+        && let Some(gitdir) = resolve_gitdir_from_file(&top_level_git)
+    {
+        subpaths.push(gitdir);
     }
+    subpaths.push(top_level_git);
 
-    // Make .agents/skills and .codex/config.toml and related files read-only
-    // to the agent, by default.
+    // Reserve .agents/skills and .codex/config.toml and related files even
+    // when the paths do not exist yet, so the sandbox blocks creating them.
     for subdir in &[".agents", ".codex"] {
         #[allow(clippy::expect_used)]
         let top_level_codex = writable_root.join(subdir).expect("valid relative path");
-        if top_level_codex.as_path().is_dir() {
-            subpaths.push(top_level_codex);
-        }
+        subpaths.push(top_level_codex);
     }
 
     let mut deduped = Vec::with_capacity(subpaths.len());
@@ -4094,6 +4089,19 @@ mod tests {
         let expected_docs_public =
             AbsolutePathBuf::from_absolute_path(canonical_cwd.join("docs/public"))
                 .expect("canonical docs/public");
+        let mut expected_cwd_reserved_paths = vec![
+            canonical_cwd.join(".agents"),
+            canonical_cwd.join(".codex"),
+            canonical_cwd.join(".git"),
+            expected_docs.to_path_buf(),
+        ];
+        expected_cwd_reserved_paths.sort();
+        let mut expected_docs_public_reserved_paths = vec![
+            expected_docs_public.to_path_buf().join(".agents"),
+            expected_docs_public.to_path_buf().join(".codex"),
+            expected_docs_public.to_path_buf().join(".git"),
+        ];
+        expected_docs_public_reserved_paths.sort();
         let policy = FileSystemSandboxPolicy::restricted(vec![
             FileSystemSandboxEntry {
                 path: FileSystemPath::Special {
@@ -4115,9 +4123,37 @@ mod tests {
         assert_eq!(
             sorted_writable_roots(policy.get_writable_roots_with_cwd(cwd.path())),
             vec![
-                (canonical_cwd, vec![expected_docs.to_path_buf()]),
-                (expected_docs_public.to_path_buf(), Vec::new()),
+                (canonical_cwd, expected_cwd_reserved_paths),
+                (
+                    expected_docs_public.to_path_buf(),
+                    expected_docs_public_reserved_paths,
+                ),
             ]
+        );
+    }
+
+    #[test]
+    fn restricted_file_system_policy_reserves_missing_repo_and_codex_paths() {
+        let cwd = TempDir::new().expect("tempdir");
+        let canonical_cwd = cwd.path().canonicalize().expect("canonicalize cwd");
+        let cwd_absolute =
+            AbsolutePathBuf::from_absolute_path(&canonical_cwd).expect("absolute tempdir");
+        let expected_agents = canonical_cwd.join(".agents");
+        let expected_codex = canonical_cwd.join(".codex");
+        let expected_git = canonical_cwd.join(".git");
+        let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::CurrentWorkingDirectory,
+            },
+            access: FileSystemAccessMode::Write,
+        }]);
+
+        let mut expected_reserved_paths = vec![expected_agents, expected_codex, expected_git];
+        expected_reserved_paths.sort();
+
+        assert_eq!(
+            sorted_writable_roots(policy.get_writable_roots_with_cwd(cwd.path())),
+            vec![(cwd_absolute.to_path_buf(), expected_reserved_paths)]
         );
     }
 
@@ -4137,13 +4173,19 @@ mod tests {
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
         };
+        let mut expected_reserved_paths = vec![
+            canonical_cwd.join(".agents"),
+            canonical_cwd.join(".codex"),
+            canonical_cwd.join(".git"),
+        ];
+        expected_reserved_paths.sort();
 
         assert_eq!(
             sorted_writable_roots(
                 FileSystemSandboxPolicy::from_legacy_sandbox_policy(&policy, cwd.path())
                     .get_writable_roots_with_cwd(cwd.path())
             ),
-            vec![(canonical_cwd, Vec::new())]
+            vec![(canonical_cwd, expected_reserved_paths)]
         );
     }
 
