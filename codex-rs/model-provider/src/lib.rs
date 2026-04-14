@@ -5,14 +5,11 @@
 //! policy explicitly enables the selected provider.
 
 use codex_model_provider_info::ModelProviderInfo;
-use codex_model_provider_info::WireApi;
 use codex_protocol::config_types::ModelProviderAuthInfo;
 use codex_protocol::error::Result as CodexResult;
-use codex_protocol::openai_models::ModelsResponse;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashSet;
-use std::time::Duration;
 
 /// Provider IDs opted in to the runtime provider framework in production.
 ///
@@ -36,9 +33,6 @@ pub struct ResolvedModelProvider {
     pub id: String,
     pub info: ModelProviderInfo,
     pub auth: ProviderAuthKind,
-    pub model_catalog: ProviderModelCatalog,
-    pub transport: ProviderTransport,
-    pub capabilities: ProviderCapabilities,
 }
 
 impl ResolvedModelProvider {
@@ -56,8 +50,6 @@ impl ResolvedModelProvider {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum ProviderAuthKind {
-    /// OpenAI-managed auth.
-    OpenAi,
     /// Bearer token read from a configured environment variable.
     EnvBearer {
         env_key: String,
@@ -67,63 +59,8 @@ pub enum ProviderAuthKind {
     StaticBearer { token: String },
     /// Command-backed bearer token.
     CommandBearer { config: ModelProviderAuthInfo },
-    /// No provider auth is required.
-    None,
-}
-
-/// Provider-owned model catalog source.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "camelCase")]
-pub enum ProviderModelCatalog {
-    /// Preserve the existing model-listing behavior.
-    Legacy,
-    /// Use a static catalog as authoritative.
-    Static { models: ModelsResponse },
-}
-
-/// Provider-owned transport metadata.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ProviderTransport {
-    pub base_url: Option<String>,
-    pub wire_api: WireApi,
-    pub request_timeout: Option<Duration>,
-    pub supports_websockets: bool,
-}
-
-/// Provider-specific capability gates.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ProviderCapabilities {
-    pub realtime: CapabilitySupport,
-    pub audio_transcription: CapabilitySupport,
-    pub image_generation: CapabilitySupport,
-    pub web_search: CapabilitySupport,
-    pub js_repl: CapabilitySupport,
-    pub prompt_image_input: CapabilitySupport,
-}
-
-impl ProviderCapabilities {
-    pub fn legacy_current_behavior() -> Self {
-        Self {
-            realtime: CapabilitySupport::Legacy,
-            audio_transcription: CapabilitySupport::Legacy,
-            image_generation: CapabilitySupport::Legacy,
-            web_search: CapabilitySupport::Legacy,
-            js_repl: CapabilitySupport::Legacy,
-            prompt_image_input: CapabilitySupport::Legacy,
-        }
-    }
-}
-
-/// Whether a provider supports a capability.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "support", rename_all = "camelCase")]
-pub enum CapabilitySupport {
-    /// Preserve existing feature/model-driven behavior.
-    Legacy,
-    /// Capability is supported by the provider.
-    Supported,
-    /// Capability is not supported by the provider.
-    Unsupported { reason: String },
+    /// Bearer token supplied by the session auth manager.
+    AuthManager,
 }
 
 /// Policy controlling which providers may use the new runtime framework.
@@ -182,14 +119,6 @@ fn resolve_generic_model_provider(
         id: provider_id.to_string(),
         info: provider.clone(),
         auth: resolve_provider_auth(provider),
-        model_catalog: ProviderModelCatalog::Legacy,
-        transport: ProviderTransport {
-            base_url: provider.base_url.clone(),
-            wire_api: provider.wire_api,
-            request_timeout: None,
-            supports_websockets: provider.supports_websockets,
-        },
-        capabilities: ProviderCapabilities::legacy_current_behavior(),
     }
 }
 
@@ -207,10 +136,8 @@ fn resolve_provider_auth(provider: &ModelProviderInfo) -> ProviderAuthKind {
         ProviderAuthKind::CommandBearer {
             config: config.clone(),
         }
-    } else if provider.requires_openai_auth {
-        ProviderAuthKind::OpenAi
     } else {
-        ProviderAuthKind::None
+        ProviderAuthKind::AuthManager
     }
 }
 
@@ -341,12 +268,7 @@ mod tests {
         };
         assert_eq!(resolved.id, OPENAI_PROVIDER_ID);
         assert_eq!(resolved.info, *provider);
-        assert_eq!(resolved.auth, ProviderAuthKind::OpenAi);
-        assert_eq!(resolved.model_catalog, ProviderModelCatalog::Legacy);
-        assert_eq!(
-            resolved.capabilities,
-            ProviderCapabilities::legacy_current_behavior()
-        );
+        assert_eq!(resolved.auth, ProviderAuthKind::AuthManager);
     }
 
     #[test]

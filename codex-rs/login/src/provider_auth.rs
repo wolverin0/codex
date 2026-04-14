@@ -40,10 +40,9 @@ pub fn auth_manager_for_provider_auth(
         ProviderAuthKind::CommandBearer { config } => {
             Some(AuthManager::external_bearer_only(config.clone()))
         }
-        ProviderAuthKind::OpenAi
-        | ProviderAuthKind::EnvBearer { .. }
+        ProviderAuthKind::EnvBearer { .. }
         | ProviderAuthKind::StaticBearer { .. }
-        | ProviderAuthKind::None => auth_manager,
+        | ProviderAuthKind::AuthManager => auth_manager,
     }
 }
 

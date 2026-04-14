@@ -59,10 +59,9 @@ pub fn collect_auth_env_telemetry_for_provider_auth(
 ) -> AuthEnvTelemetry {
     let provider_env_key = match provider_auth {
         ProviderAuthKind::EnvBearer { env_key, .. } => Some(env_key.as_str()),
-        ProviderAuthKind::OpenAi
-        | ProviderAuthKind::StaticBearer { .. }
+        ProviderAuthKind::StaticBearer { .. }
         | ProviderAuthKind::CommandBearer { .. }
-        | ProviderAuthKind::None => None,
+        | ProviderAuthKind::AuthManager => None,
     };
     collect_auth_env_telemetry_for_env_key(provider_env_key, codex_api_key_env_enabled)
 }

@@ -79,7 +79,7 @@ pub fn auth_provider_from_provider_auth(
             token: Some(token.clone()),
             account_id: None,
         }),
-        ProviderAuthKind::OpenAi | ProviderAuthKind::CommandBearer { .. } => {
+        ProviderAuthKind::CommandBearer { .. } | ProviderAuthKind::AuthManager => {
             if let Some(auth) = auth {
                 let token = auth.get_token()?;
                 Ok(CoreAuthProvider {
@@ -93,10 +93,6 @@ pub fn auth_provider_from_provider_auth(
                 })
             }
         }
-        ProviderAuthKind::None => Ok(CoreAuthProvider {
-            token: None,
-            account_id: None,
-        }),
     }
 }
 
@@ -197,5 +193,26 @@ mod tests {
         };
 
         assert_eq!(resolved, legacy);
+    }
+
+    #[test]
+    fn runtime_auth_adapter_uses_auth_manager_fallback() {
+        let provider = ModelProviderInfo {
+            experimental_bearer_token: None,
+            requires_openai_auth: false,
+            ..bearer_provider()
+        };
+        let runtime = resolve_model_provider(
+            "custom",
+            &provider,
+            &ProviderResolutionPolicy::with_enabled_provider_ids(["custom".to_string()]),
+        );
+        let auth = Some(CodexAuth::from_api_key("auth-manager-token"));
+
+        let legacy = auth_provider_from_auth(auth.clone(), &provider).expect("legacy auth");
+        let resolved = auth_provider_from_runtime(auth, &runtime, &provider).expect("runtime auth");
+
+        assert_eq!(resolved.bearer_token(), legacy.bearer_token());
+        assert_eq!(resolved.account_id(), legacy.account_id());
     }
 }
