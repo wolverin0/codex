@@ -2,15 +2,15 @@
 source: tui/src/history_cell.rs
 expression: rendered
 ---
-╭─────────────────────────────────────────╮
-│ >_ OpenAI Codex (v0.0.0)                │
-│                                         │
-│ model:        gpt-5   /model to change  │
-│ directory:    /tmp/project              │
-│ account:      dev@example.com (Business)│
-│ organization: Acme Corp                 │
+╭──────────────────────────────────────────╮
+│ >_ OpenAI Codex (v0.0.0)                 │
+│                                          │
+│ model:        gpt-5   /model to change   │
+│ directory:    /tmp/project               │
+│ account:      dev@example.com (Business) │
+│ organization: Acme Corp                  │
 │ groups:       Engineering, Research      │
-╰─────────────────────────────────────────╯
+╰──────────────────────────────────────────╯
 
   To get started, describe a task or try one of these commands:
 
