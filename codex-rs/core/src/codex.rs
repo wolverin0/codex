@@ -1068,15 +1068,6 @@ impl TurnContext {
         }
     }
 
-    pub(crate) fn mcp_sandbox_state(&self) -> SandboxState {
-        SandboxState {
-            sandbox_policy: self.sandbox_policy.get().clone(),
-            codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.clone(),
-            sandbox_cwd: self.cwd.to_path_buf(),
-            use_legacy_landlock: self.features.use_legacy_landlock(),
-        }
-    }
-
     pub(crate) fn compact_prompt(&self) -> &str {
         self.compact_prompt
             .as_deref()
@@ -2174,6 +2165,8 @@ impl Session {
 
         // Start the watcher after SessionConfigured so it cannot emit earlier events.
         sess.start_skills_watcher_listener();
+        // Construct sandbox_state before MCP startup so it can be sent to each
+        // MCP server immediately after it becomes ready (avoiding blocking).
         let mut required_mcp_servers: Vec<String> = mcp_servers
             .iter()
             .filter(|(_, server)| server.enabled && server.required)
@@ -2651,12 +2644,7 @@ impl Session {
         if sandbox_policy_changed {
             self.refresh_managed_network_proxy_for_current_sandbox_policy()
                 .await;
-            let sandbox_state = SandboxState {
-                sandbox_policy: per_turn_config.permissions.sandbox_policy.get().clone(),
-                codex_linux_sandbox_exe: per_turn_config.codex_linux_sandbox_exe.clone(),
-                sandbox_cwd: per_turn_config.cwd.to_path_buf(),
-                use_legacy_landlock: per_turn_config.features.use_legacy_landlock(),
-            };
+            let sandbox_state = session_configuration.mcp_sandbox_state();
             if let Err(e) = self
                 .services
                 .mcp_connection_manager
@@ -4563,7 +4551,12 @@ impl Session {
             .tool_plugin_provenance(config.as_ref());
         let mcp_servers = with_codex_apps_mcp(mcp_servers, auth.as_ref(), &mcp_config);
         let auth_statuses = compute_auth_statuses(mcp_servers.iter(), store_mode).await;
-        let sandbox_state = turn_context.mcp_sandbox_state();
+        let sandbox_state = SandboxState {
+            sandbox_policy: turn_context.sandbox_policy.get().clone(),
+            codex_linux_sandbox_exe: turn_context.codex_linux_sandbox_exe.clone(),
+            sandbox_cwd: turn_context.cwd.to_path_buf(),
+            use_legacy_landlock: turn_context.features.use_legacy_landlock(),
+        };
         {
             let mut guard = self.services.mcp_startup_cancellation_token.lock().await;
             guard.cancel();

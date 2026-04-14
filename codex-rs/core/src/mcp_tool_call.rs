@@ -38,6 +38,7 @@ use codex_config::types::AppToolApproval;
 use codex_features::Feature;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::MCP_SANDBOX_STATE_META_CAPABILITY;
+use codex_mcp::SandboxState;
 use codex_mcp::declared_openai_file_input_param_names;
 use codex_mcp::mcp_permission_prompt_is_auto_approved;
 use codex_otel::sanitize_metric_tag_value;
@@ -660,8 +661,13 @@ fn build_mcp_tool_call_request_meta(
     if include_sandbox_state {
         request_meta.insert(
             MCP_SANDBOX_STATE_META_CAPABILITY.to_string(),
-            serde_json::to_value(turn_context.mcp_sandbox_state())
-                .expect("sandbox state should serialize"),
+            serde_json::to_value(SandboxState {
+                sandbox_policy: turn_context.sandbox_policy.get().clone(),
+                codex_linux_sandbox_exe: turn_context.codex_linux_sandbox_exe.clone(),
+                sandbox_cwd: turn_context.cwd.to_path_buf(),
+                use_legacy_landlock: turn_context.features.use_legacy_landlock(),
+            })
+            .expect("sandbox state should serialize"),
         );
     }
 

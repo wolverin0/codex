@@ -637,7 +637,15 @@ async fn mcp_tool_call_request_meta_includes_sandbox_state_when_requested() {
 
     assert_eq!(
         meta.get(codex_mcp::MCP_SANDBOX_STATE_META_CAPABILITY),
-        Some(&serde_json::to_value(turn_context.mcp_sandbox_state()).expect("sandbox state")),
+        Some(
+            &serde_json::to_value(codex_mcp::SandboxState {
+                sandbox_policy: turn_context.sandbox_policy.get().clone(),
+                codex_linux_sandbox_exe: turn_context.codex_linux_sandbox_exe.clone(),
+                sandbox_cwd: turn_context.cwd.to_path_buf(),
+                use_legacy_landlock: turn_context.features.use_legacy_landlock(),
+            })
+            .expect("sandbox state"),
+        ),
     );
 }
 
