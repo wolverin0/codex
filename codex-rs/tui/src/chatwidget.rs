@@ -2028,11 +2028,13 @@ impl ChatWidget {
             &self.config,
             &model_for_header,
             event,
-            self.show_welcome_banner,
-            startup_tooltip_override,
-            self.status_account_display.as_ref(),
-            self.plan_type,
-            show_fast_status,
+            history_cell::SessionInfoOptions {
+                is_first_event: self.show_welcome_banner,
+                tooltip_override: startup_tooltip_override,
+                account_display: self.status_account_display.as_ref(),
+                auth_plan: self.plan_type,
+                show_fast_status,
+            },
         );
         self.apply_session_info_cell(session_info_cell);
 

@@ -1134,6 +1134,14 @@ impl HistoryCell for TooltipHistoryCell {
 #[derive(Debug)]
 pub struct SessionInfoCell(CompositeHistoryCell);
 
+pub(crate) struct SessionInfoOptions<'a> {
+    pub(crate) is_first_event: bool,
+    pub(crate) tooltip_override: Option<String>,
+    pub(crate) account_display: Option<&'a StatusAccountDisplay>,
+    pub(crate) auth_plan: Option<PlanType>,
+    pub(crate) show_fast_status: bool,
+}
+
 impl HistoryCell for SessionInfoCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         self.0.display_lines(width)
@@ -1152,12 +1160,15 @@ pub(crate) fn new_session_info(
     config: &Config,
     requested_model: &str,
     event: SessionConfiguredEvent,
-    is_first_event: bool,
-    tooltip_override: Option<String>,
-    account_display: Option<&StatusAccountDisplay>,
-    auth_plan: Option<PlanType>,
-    show_fast_status: bool,
+    options: SessionInfoOptions<'_>,
 ) -> SessionInfoCell {
+    let SessionInfoOptions {
+        is_first_event,
+        tooltip_override,
+        account_display,
+        auth_plan,
+        show_fast_status,
+    } = options;
     let SessionConfiguredEvent {
         model,
         reasoning_effort,
@@ -1392,7 +1403,7 @@ impl HistoryCell for SessionHeaderHistoryCell {
             truncate_line_with_ellipsis_if_overflow(Line::from(spans), inner_width)
         };
 
-        let model_label = format!(
+         let model_label = format!(
             "{model_label:<label_width$}",
             model_label = MODEL_LABEL,
             label_width = label_width
@@ -3177,11 +3188,13 @@ mod tests {
             &config,
             "gpt-5",
             session_configured_event("gpt-5"),
-            /*is_first_event*/ false,
-            Some("Model just became available".to_string()),
-            /*account_display*/ None,
-            Some(PlanType::Free),
-            /*show_fast_status*/ false,
+            SessionInfoOptions {
+                is_first_event: false,
+                tooltip_override: Some("Model just became available".to_string()),
+                account_display: None,
+                auth_plan: Some(PlanType::Free),
+                show_fast_status: false,
+            },
         );
 
         let rendered = render_transcript(&cell).join("\n");
@@ -3200,11 +3213,13 @@ mod tests {
             &config,
             "gpt-5",
             session_configured_event("gpt-5"),
-            /*is_first_event*/ false,
-            Some("Model just became available".to_string()),
-            /*account_display*/ None,
-            Some(PlanType::Free),
-            /*show_fast_status*/ false,
+            SessionInfoOptions {
+                is_first_event: false,
+                tooltip_override: Some("Model just became available".to_string()),
+                account_display: None,
+                auth_plan: Some(PlanType::Free),
+                show_fast_status: false,
+            },
         );
 
         let rendered = render_transcript(&cell).join("\n");
@@ -3218,11 +3233,13 @@ mod tests {
             &config,
             "gpt-5",
             session_configured_event("gpt-5"),
-            /*is_first_event*/ true,
-            Some("Model just became available".to_string()),
-            /*account_display*/ None,
-            Some(PlanType::Free),
-            /*show_fast_status*/ false,
+            SessionInfoOptions {
+                is_first_event: true,
+                tooltip_override: Some("Model just became available".to_string()),
+                account_display: None,
+                auth_plan: Some(PlanType::Free),
+                show_fast_status: false,
+            },
         );
 
         let rendered = render_transcript(&cell).join("\n");
@@ -3249,11 +3266,13 @@ mod tests {
             &config,
             "gpt-5",
             session_configured_event("gpt-5"),
-            /*is_first_event*/ true,
-            /*tooltip_override*/ None,
-            Some(&account_display),
-            Some(PlanType::SelfServeBusinessUsageBased),
-            /*show_fast_status*/ false,
+            SessionInfoOptions {
+                is_first_event: true,
+                tooltip_override: None,
+                account_display: Some(&account_display),
+                auth_plan: Some(PlanType::SelfServeBusinessUsageBased),
+                show_fast_status: false,
+            },
         );
 
         let rendered = render_transcript(&cell).join("\n");
@@ -3274,11 +3293,13 @@ mod tests {
             &config,
             "gpt-5",
             session_configured_event("gpt-5"),
-            /*is_first_event*/ false,
-            /*tooltip_override*/ None,
-            Some(&account_display),
-            Some(PlanType::SelfServeBusinessUsageBased),
-            /*show_fast_status*/ false,
+            SessionInfoOptions {
+                is_first_event: false,
+                tooltip_override: None,
+                account_display: Some(&account_display),
+                auth_plan: Some(PlanType::SelfServeBusinessUsageBased),
+                show_fast_status: false,
+            },
         );
 
         let rendered = render_transcript(&cell).join("\n");
@@ -3296,11 +3317,13 @@ mod tests {
             &config,
             "gpt-5",
             session_configured_event("gpt-5"),
-            /*is_first_event*/ false,
-            Some("Model just became available".to_string()),
-            /*account_display*/ None,
-            Some(PlanType::Free),
-            /*show_fast_status*/ false,
+            SessionInfoOptions {
+                is_first_event: false,
+                tooltip_override: Some("Model just became available".to_string()),
+                account_display: None,
+                auth_plan: Some(PlanType::Free),
+                show_fast_status: false,
+            },
         );
 
         let rendered = render_transcript(&cell).join("\n");

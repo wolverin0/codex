@@ -6350,6 +6350,7 @@ mod tests {
     use crate::file_search::FileSearchManager;
     use crate::history_cell::AgentMessageCell;
     use crate::history_cell::HistoryCell;
+    use crate::history_cell::SessionInfoOptions;
     use crate::history_cell::UserHistoryCell;
     use crate::history_cell::new_session_info;
     use crate::multi_agents::AgentPickerThreadEntry;
@@ -9146,11 +9147,13 @@ guardian_approval = true
                 app.chat_widget.config_ref(),
                 app.chat_widget.current_model(),
                 event,
-                is_first,
-                /*tooltip_override*/ None,
-                /*account_display*/ None,
-                /*auth_plan*/ None,
-                /*show_fast_status*/ false,
+                SessionInfoOptions {
+                    is_first_event: is_first,
+                    tooltip_override: None,
+                    account_display: None,
+                    auth_plan: None,
+                    show_fast_status: false,
+                },
             )) as Arc<dyn HistoryCell>
         };
 
@@ -10426,11 +10429,13 @@ guardian_approval = true
                 app.chat_widget.config_ref(),
                 app.chat_widget.current_model(),
                 event,
-                is_first,
-                /*tooltip_override*/ None,
-                /*account_display*/ None,
-                /*auth_plan*/ None,
-                /*show_fast_status*/ false,
+                SessionInfoOptions {
+                    is_first_event: is_first,
+                    tooltip_override: None,
+                    account_display: None,
+                    auth_plan: None,
+                    show_fast_status: false,
+                },
             )) as Arc<dyn HistoryCell>
         };
 
