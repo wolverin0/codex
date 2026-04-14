@@ -2404,6 +2404,12 @@ impl App {
                     .await?;
                 Ok(true)
             }
+            AppCommandView::TerminateBackgroundTerminal { process_id } => {
+                app_server
+                    .thread_background_terminal_terminate(thread_id, process_id)
+                    .await?;
+                Ok(true)
+            }
             AppCommandView::RealtimeConversationStart(params) => {
                 app_server
                     .thread_realtime_start(thread_id, params.clone())

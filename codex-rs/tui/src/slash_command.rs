@@ -50,6 +50,9 @@ pub enum SlashCommand {
     Feedback,
     Rollout,
     Ps,
+    Monitors,
+    #[strum(serialize = "monitor-stop")]
+    MonitorStop,
     #[strum(to_string = "stop", serialize = "clean")]
     Stop,
     Clear,
@@ -91,6 +94,8 @@ impl SlashCommand {
             SlashCommand::Statusline => "configure which items appear in the status line",
             SlashCommand::Theme => "choose a syntax highlighting theme",
             SlashCommand::Ps => "list background terminals",
+            SlashCommand::Monitors => "show monitored background terminals",
+            SlashCommand::MonitorStop => "stop one background terminal: /monitor-stop <process_id>",
             SlashCommand::Stop => "stop all background terminals",
             SlashCommand::MemoryDrop => "DO NOT USE",
             SlashCommand::MemoryUpdate => "DO NOT USE",
@@ -134,6 +139,7 @@ impl SlashCommand {
                 | SlashCommand::Fast
                 | SlashCommand::Resume
                 | SlashCommand::SandboxReadRoot
+                | SlashCommand::MonitorStop
         )
     }
 
@@ -168,6 +174,8 @@ impl SlashCommand {
             | SlashCommand::Status
             | SlashCommand::DebugConfig
             | SlashCommand::Ps
+            | SlashCommand::Monitors
+            | SlashCommand::MonitorStop
             | SlashCommand::Stop
             | SlashCommand::Mcp
             | SlashCommand::Apps

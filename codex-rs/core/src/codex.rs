@@ -4657,6 +4657,10 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                     handlers::clean_background_terminals(&sess).await;
                     false
                 }
+                Op::TerminateBackgroundTerminal { process_id } => {
+                    handlers::terminate_background_terminal(&sess, process_id).await;
+                    false
+                }
                 Op::RealtimeConversationStart(params) => {
                     if let Err(err) =
                         handle_realtime_conversation_start(&sess, sub.id.clone(), params).await
@@ -4965,6 +4969,10 @@ mod handlers {
 
     pub async fn clean_background_terminals(sess: &Arc<Session>) {
         sess.close_unified_exec_processes().await;
+    }
+
+    pub async fn terminate_background_terminal(sess: &Arc<Session>, process_id: i32) {
+        sess.terminate_unified_exec_process(process_id).await;
     }
 
     pub async fn realtime_conversation_list_voices(sess: &Session, sub_id: String) {

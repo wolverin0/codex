@@ -663,12 +663,13 @@ pub(crate) fn new_unified_exec_interaction(
 
 #[derive(Debug)]
 struct UnifiedExecProcessesCell {
+    heading: &'static str,
     processes: Vec<UnifiedExecProcessDetails>,
 }
 
 impl UnifiedExecProcessesCell {
-    fn new(processes: Vec<UnifiedExecProcessDetails>) -> Self {
-        Self { processes }
+    fn new(heading: &'static str, processes: Vec<UnifiedExecProcessDetails>) -> Self {
+        Self { heading, processes }
     }
 }
 
@@ -676,6 +677,9 @@ impl UnifiedExecProcessesCell {
 pub(crate) struct UnifiedExecProcessDetails {
     pub(crate) command_display: String,
     pub(crate) recent_chunks: Vec<String>,
+    pub(crate) process_id: Option<String>,
+    pub(crate) monitor_status_label: Option<String>,
+    pub(crate) last_event_summary: Option<String>,
 }
 
 impl HistoryCell for UnifiedExecProcessesCell {
@@ -687,7 +691,7 @@ impl HistoryCell for UnifiedExecProcessesCell {
         let wrap_width = width as usize;
         let max_processes = 16usize;
         let mut out: Vec<Line<'static>> = Vec::new();
-        out.push(vec!["Background terminals".bold()].into());
+        out.push(vec![self.heading.bold()].into());
         out.push("".into());
 
         if self.processes.is_empty() {
@@ -738,6 +742,22 @@ impl HistoryCell for UnifiedExecProcessesCell {
             } else {
                 let (truncated, _, _) = take_prefix_by_width(&snippet, budget);
                 out.push(vec![prefix.dim(), truncated.cyan()].into());
+            }
+
+            if process.process_id.is_some() || process.monitor_status_label.is_some() {
+                let metadata = match (&process.process_id, &process.monitor_status_label) {
+                    (Some(process_id), Some(status)) => format!("#{process_id} [{status}]"),
+                    (Some(process_id), None) => format!("#{process_id}"),
+                    (None, Some(status)) => format!("[{status}]"),
+                    (None, None) => String::new(),
+                };
+                if !metadata.is_empty() {
+                    out.push(vec!["    \u{00B7} ".dim(), metadata.yellow()].into());
+                }
+            }
+
+            if let Some(summary) = &process.last_event_summary {
+                out.push(vec!["    \u{00B7} ".dim(), summary.clone().dim()].into());
             }
 
             let chunk_prefix_first = "    ↳ ";
@@ -792,7 +812,15 @@ pub(crate) fn new_unified_exec_processes_output(
     processes: Vec<UnifiedExecProcessDetails>,
 ) -> CompositeHistoryCell {
     let command = PlainHistoryCell::new(vec!["/ps".magenta().into()]);
-    let summary = UnifiedExecProcessesCell::new(processes);
+    let summary = UnifiedExecProcessesCell::new("Background terminals", processes);
+    CompositeHistoryCell::new(vec![Box::new(command), Box::new(summary)])
+}
+
+pub(crate) fn new_monitored_unified_exec_processes_output(
+    processes: Vec<UnifiedExecProcessDetails>,
+) -> CompositeHistoryCell {
+    let command = PlainHistoryCell::new(vec!["/monitors".magenta().into()]);
+    let summary = UnifiedExecProcessesCell::new("Monitored background terminals", processes);
     CompositeHistoryCell::new(vec![Box::new(command), Box::new(summary)])
 }
 
@@ -3169,10 +3197,16 @@ mod tests {
             UnifiedExecProcessDetails {
                 command_display: "echo hello\nand then some extra text".to_string(),
                 recent_chunks: vec!["hello".to_string(), "done".to_string()],
+                process_id: None,
+                monitor_status_label: None,
+                last_event_summary: None,
             },
             UnifiedExecProcessDetails {
                 command_display: "rg \"foo\" src".to_string(),
                 recent_chunks: vec!["src/main.rs:12:foo".to_string()],
+                process_id: None,
+                monitor_status_label: None,
+                last_event_summary: None,
             },
         ]);
         let rendered = render_lines(&cell.display_lines(/*width*/ 40)).join("\n");
@@ -3186,6 +3220,9 @@ mod tests {
                 "rg \"foo\" src --glob '**/*.rs' --max-count 1000 --no-ignore --hidden --follow --glob '!target/**'",
             ),
             recent_chunks: vec!["searching...".to_string()],
+            process_id: None,
+            monitor_status_label: None,
+            last_event_summary: None,
         }]);
         let rendered = render_lines(&cell.display_lines(/*width*/ 36)).join("\n");
         insta::assert_snapshot!(rendered);
@@ -3198,6 +3235,9 @@ mod tests {
                 .map(|idx| UnifiedExecProcessDetails {
                     command_display: format!("command {idx}"),
                     recent_chunks: Vec::new(),
+                    process_id: None,
+                    monitor_status_label: None,
+                    last_event_summary: None,
                 })
                 .collect(),
         );
@@ -3213,6 +3253,9 @@ mod tests {
                 "  indented first".to_string(),
                 "    more indented".to_string(),
             ],
+            process_id: None,
+            monitor_status_label: None,
+            last_event_summary: None,
         }]);
         let rendered = render_lines(&cell.display_lines(/*width*/ 60)).join("\n");
         insta::assert_snapshot!(rendered);

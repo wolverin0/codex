@@ -473,6 +473,57 @@ async fn slash_stop_submits_background_terminal_cleanup() {
 }
 
 #[tokio::test]
+async fn slash_monitor_stop_submits_targeted_background_terminal_terminate() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.unified_exec_processes.push(UnifiedExecProcessSummary {
+        key: "4242".to_string(),
+        call_id: "call-1".to_string(),
+        process_id: Some("4242".to_string()),
+        command_display: "npm run dev".to_string(),
+        recent_chunks: vec!["ready in 120ms".to_string()],
+        monitor: crate::unified_exec_monitor::UnifiedExecMonitorState::default(),
+    });
+
+    chat.dispatch_command_with_args(SlashCommand::MonitorStop, "4242".to_string(), Vec::new());
+
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::TerminateBackgroundTerminal { process_id }) if process_id == 4242
+    );
+    assert!(chat.unified_exec_processes.is_empty());
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("Stopping background terminal 4242."),
+        "expected targeted stop confirmation, got {rendered:?}"
+    );
+}
+
+#[tokio::test]
+async fn bare_slash_monitor_stop_shows_usage() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command(SlashCommand::MonitorStop);
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("Usage: /monitor-stop <process_id>"),
+        "expected usage message, got {rendered:?}"
+    );
+}
+
+#[tokio::test]
 async fn slash_clear_requests_ui_clear_when_idle() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

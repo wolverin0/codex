@@ -31,6 +31,9 @@ pub(crate) struct AppCommand(Op);
 pub(crate) enum AppCommandView<'a> {
     Interrupt,
     CleanBackgroundTerminals,
+    TerminateBackgroundTerminal {
+        process_id: i32,
+    },
     RealtimeConversationStart(&'a ConversationStartParams),
     RealtimeConversationAudio(&'a ConversationAudioParams),
     RealtimeConversationText(&'a ConversationTextParams),
@@ -115,6 +118,10 @@ impl AppCommand {
 
     pub(crate) fn clean_background_terminals() -> Self {
         Self(Op::CleanBackgroundTerminals)
+    }
+
+    pub(crate) fn terminate_background_terminal(process_id: i32) -> Self {
+        Self(Op::TerminateBackgroundTerminal { process_id })
     }
 
     pub(crate) fn realtime_conversation_start(params: ConversationStartParams) -> Self {
@@ -287,6 +294,11 @@ impl AppCommand {
         match &self.0 {
             Op::Interrupt => AppCommandView::Interrupt,
             Op::CleanBackgroundTerminals => AppCommandView::CleanBackgroundTerminals,
+            Op::TerminateBackgroundTerminal { process_id } => {
+                AppCommandView::TerminateBackgroundTerminal {
+                    process_id: *process_id,
+                }
+            }
             Op::RealtimeConversationStart(params) => {
                 AppCommandView::RealtimeConversationStart(params)
             }

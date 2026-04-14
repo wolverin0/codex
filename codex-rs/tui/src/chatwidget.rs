@@ -80,6 +80,9 @@ use crate::terminal_title::SetTerminalTitleResult;
 use crate::terminal_title::clear_terminal_title;
 use crate::terminal_title::set_terminal_title;
 use crate::text_formatting::proper_join;
+use crate::unified_exec_monitor::UnifiedExecMonitorNotification;
+use crate::unified_exec_monitor::UnifiedExecMonitorNotificationLevel;
+use crate::unified_exec_monitor::UnifiedExecMonitorState;
 use crate::version::CODEX_CLI_VERSION;
 use codex_app_server_protocol::AppSummary;
 use codex_app_server_protocol::CodexErrorInfo as AppServerCodexErrorInfo;
@@ -405,8 +408,10 @@ struct RunningCommand {
 struct UnifiedExecProcessSummary {
     key: String,
     call_id: String,
+    process_id: Option<String>,
     command_display: String,
     recent_chunks: Vec<String>,
+    monitor: UnifiedExecMonitorState,
 }
 
 struct UnifiedExecWaitState {
@@ -3649,14 +3654,18 @@ impl ChatWidget {
             .find(|process| process.key == key)
         {
             existing.call_id = ev.call_id.clone();
+            existing.process_id = ev.process_id.clone();
             existing.command_display = command_display;
             existing.recent_chunks.clear();
+            existing.monitor = UnifiedExecMonitorState::default();
         } else {
             self.unified_exec_processes.push(UnifiedExecProcessSummary {
                 key,
                 call_id: ev.call_id.clone(),
+                process_id: ev.process_id.clone(),
                 command_display,
                 recent_chunks: Vec::new(),
+                monitor: UnifiedExecMonitorState::default(),
             });
         }
         self.sync_unified_exec_footer();
@@ -3681,29 +3690,53 @@ impl ChatWidget {
         self.bottom_pane.set_unified_exec_processes(processes);
     }
 
+    fn emit_unified_exec_monitor_notification(
+        &mut self,
+        notification: UnifiedExecMonitorNotification,
+    ) {
+        match notification.level {
+            UnifiedExecMonitorNotificationLevel::Info => {
+                self.add_info_message(notification.message, /*hint*/ None);
+            }
+            UnifiedExecMonitorNotificationLevel::Error => {
+                self.add_error_message(notification.message);
+            }
+        }
+    }
+
     /// Record recent stdout/stderr lines for the unified exec footer.
     fn track_unified_exec_output_chunk(&mut self, call_id: &str, chunk: &[u8]) {
-        let Some(process) = self
+        let Some(index) = self
             .unified_exec_processes
-            .iter_mut()
-            .find(|process| process.call_id == call_id)
+            .iter()
+            .position(|process| process.call_id == call_id)
         else {
             return;
         };
 
-        let text = String::from_utf8_lossy(chunk);
-        for line in text
-            .lines()
-            .map(str::trim_end)
-            .filter(|line| !line.is_empty())
-        {
-            process.recent_chunks.push(line.to_string());
-        }
-
         const MAX_RECENT_CHUNKS: usize = 3;
-        if process.recent_chunks.len() > MAX_RECENT_CHUNKS {
-            let drop_count = process.recent_chunks.len() - MAX_RECENT_CHUNKS;
-            process.recent_chunks.drain(0..drop_count);
+        let notification = {
+            let process = &mut self.unified_exec_processes[index];
+            let update = process.monitor.ingest_chunk(
+                chunk,
+                &process.command_display,
+                process.process_id.as_deref(),
+            );
+
+            for line in update.completed_lines {
+                process.recent_chunks.push(line);
+            }
+
+            if process.recent_chunks.len() > MAX_RECENT_CHUNKS {
+                let drop_count = process.recent_chunks.len() - MAX_RECENT_CHUNKS;
+                process.recent_chunks.drain(0..drop_count);
+            }
+
+            update.notification
+        };
+
+        if let Some(notification) = notification {
+            self.emit_unified_exec_monitor_notification(notification);
         }
     }
 
@@ -7223,16 +7256,44 @@ impl ChatWidget {
         }
     }
 
-    pub(crate) fn add_ps_output(&mut self) {
-        let processes = self
-            .unified_exec_processes
+    fn unified_exec_process_details(
+        &self,
+        include_monitoring: bool,
+    ) -> Vec<history_cell::UnifiedExecProcessDetails> {
+        self.unified_exec_processes
             .iter()
             .map(|process| history_cell::UnifiedExecProcessDetails {
                 command_display: process.command_display.clone(),
                 recent_chunks: process.recent_chunks.clone(),
+                process_id: if include_monitoring {
+                    process.process_id.clone()
+                } else {
+                    None
+                },
+                monitor_status_label: if include_monitoring {
+                    Some(process.monitor.status().label().to_string())
+                } else {
+                    None
+                },
+                last_event_summary: if include_monitoring {
+                    process.monitor.last_event_summary().map(str::to_string)
+                } else {
+                    None
+                },
             })
-            .collect();
+            .collect()
+    }
+
+    pub(crate) fn add_ps_output(&mut self) {
+        let processes = self.unified_exec_process_details(/*include_monitoring*/ false);
         self.add_to_history(history_cell::new_unified_exec_processes_output(processes));
+    }
+
+    pub(crate) fn add_monitors_output(&mut self) {
+        let processes = self.unified_exec_process_details(/*include_monitoring*/ true);
+        self.add_to_history(history_cell::new_monitored_unified_exec_processes_output(
+            processes,
+        ));
     }
 
     fn clean_background_terminals(&mut self) {
@@ -7241,6 +7302,33 @@ impl ChatWidget {
         self.sync_unified_exec_footer();
         self.add_info_message(
             "Stopping all background terminals.".to_string(),
+            /*hint*/ None,
+        );
+    }
+
+    fn stop_monitored_background_terminal(&mut self, process_id_arg: &str) {
+        let Ok(process_id) = process_id_arg.parse::<i32>() else {
+            self.add_error_message("Usage: /monitor-stop <process_id>".to_string());
+            return;
+        };
+
+        let process_id_string = process_id.to_string();
+        let Some(index) = self
+            .unified_exec_processes
+            .iter()
+            .position(|process| process.process_id.as_deref() == Some(process_id_string.as_str()))
+        else {
+            self.add_error_message(format!(
+                "No monitored background terminal found for process_id {process_id}."
+            ));
+            return;
+        };
+
+        self.submit_op(AppCommand::terminate_background_terminal(process_id));
+        self.unified_exec_processes.remove(index);
+        self.sync_unified_exec_footer();
+        self.add_info_message(
+            format!("Stopping background terminal {process_id}."),
             /*hint*/ None,
         );
     }

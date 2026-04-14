@@ -121,6 +121,8 @@ use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadArchiveResponse;
 use codex_app_server_protocol::ThreadArchivedNotification;
+use codex_app_server_protocol::ThreadBackgroundTerminalTerminateParams;
+use codex_app_server_protocol::ThreadBackgroundTerminalTerminateResponse;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanParams;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanResponse;
 use codex_app_server_protocol::ThreadClosedNotification;
@@ -898,6 +900,13 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ThreadBackgroundTerminalsClean { request_id, params } => {
                 self.thread_background_terminals_clean(
+                    to_connection_request_id(request_id),
+                    params,
+                )
+                .await;
+            }
+            ClientRequest::ThreadBackgroundTerminalTerminate { request_id, params } => {
+                self.thread_background_terminal_terminate(
                     to_connection_request_id(request_id),
                     params,
                 )
@@ -3629,6 +3638,47 @@ impl CodexMessageProcessor {
                 self.send_internal_error(
                     request_id,
                     format!("failed to clean background terminals: {err}"),
+                )
+                .await;
+            }
+        }
+    }
+
+    async fn thread_background_terminal_terminate(
+        &self,
+        request_id: ConnectionRequestId,
+        params: ThreadBackgroundTerminalTerminateParams,
+    ) {
+        let ThreadBackgroundTerminalTerminateParams {
+            thread_id,
+            process_id,
+        } = params;
+
+        let (_, thread) = match self.load_thread(&thread_id).await {
+            Ok(v) => v,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        match self
+            .submit_core_op(
+                &request_id,
+                thread.as_ref(),
+                Op::TerminateBackgroundTerminal { process_id },
+            )
+            .await
+        {
+            Ok(_) => {
+                self.outgoing
+                    .send_response(request_id, ThreadBackgroundTerminalTerminateResponse {})
+                    .await;
+            }
+            Err(err) => {
+                self.send_internal_error(
+                    request_id,
+                    format!("failed to terminate background terminal {process_id}: {err}"),
                 )
                 .await;
             }

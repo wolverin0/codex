@@ -28,6 +28,8 @@ use codex_app_server_protocol::ReviewStartResponse;
 use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::Thread;
+use codex_app_server_protocol::ThreadBackgroundTerminalTerminateParams;
+use codex_app_server_protocol::ThreadBackgroundTerminalTerminateResponse;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanParams;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanResponse;
 use codex_app_server_protocol::ThreadCompactStartParams;
@@ -576,6 +578,26 @@ impl AppServerSession {
             })
             .await
             .wrap_err("thread/backgroundTerminals/clean failed in TUI")?;
+        Ok(())
+    }
+
+    pub(crate) async fn thread_background_terminal_terminate(
+        &mut self,
+        thread_id: ThreadId,
+        process_id: i32,
+    ) -> Result<()> {
+        let request_id = self.next_request_id();
+        let _: ThreadBackgroundTerminalTerminateResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadBackgroundTerminalTerminate {
+                request_id,
+                params: ThreadBackgroundTerminalTerminateParams {
+                    thread_id: thread_id.to_string(),
+                    process_id,
+                },
+            })
+            .await
+            .wrap_err("thread/backgroundTerminals/terminate failed in TUI")?;
         Ok(())
     }
 

@@ -557,6 +557,13 @@ impl Session {
             .await;
     }
 
+    pub(crate) async fn terminate_unified_exec_process(&self, process_id: i32) {
+        self.services
+            .unified_exec_manager
+            .terminate_process(process_id)
+            .await;
+    }
+
     pub(crate) async fn cleanup_after_interrupt(&self, turn_context: &Arc<TurnContext>) {
         if let Some(manager) = turn_context.js_repl.manager_if_initialized()
             && let Err(err) = manager.interrupt_turn_exec(&turn_context.sub_id).await

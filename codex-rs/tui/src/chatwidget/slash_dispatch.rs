@@ -299,6 +299,12 @@ impl ChatWidget {
             SlashCommand::Ps => {
                 self.add_ps_output();
             }
+            SlashCommand::Monitors => {
+                self.add_monitors_output();
+            }
+            SlashCommand::MonitorStop => {
+                self.add_error_message("Usage: /monitor-stop <process_id>".to_string());
+            }
             SlashCommand::Stop => {
                 self.clean_background_terminals();
             }
@@ -498,6 +504,21 @@ impl ChatWidget {
                 };
                 self.app_event_tx
                     .send(AppEvent::ResumeSessionByIdOrName(prepared_args));
+                self.bottom_pane.drain_pending_submission_state();
+            }
+            SlashCommand::MonitorStop if !trimmed.is_empty() => {
+                let prepared_args = if self.bottom_pane.composer_text().is_empty() {
+                    args
+                } else {
+                    let Some((prepared_args, _prepared_elements)) = self
+                        .bottom_pane
+                        .prepare_inline_args_submission(/*record_history*/ false)
+                    else {
+                        return;
+                    };
+                    prepared_args
+                };
+                self.stop_monitored_background_terminal(prepared_args.trim());
                 self.bottom_pane.drain_pending_submission_state();
             }
             SlashCommand::SandboxReadRoot if !trimmed.is_empty() => {

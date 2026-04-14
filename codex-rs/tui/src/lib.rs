@@ -158,6 +158,7 @@ mod theme_picker;
 mod tooltips;
 mod tui;
 mod ui_consts;
+mod unified_exec_monitor;
 pub(crate) mod update_action;
 pub use update_action::UpdateAction;
 mod update_prompt;
