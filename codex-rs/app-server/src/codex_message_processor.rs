@@ -1718,36 +1718,41 @@ impl CodexMessageProcessor {
                                                 None
                                             }
                                         };
-                                        let account_group_names = match (
-                                            account_id.as_deref(),
-                                            chatgpt_user_id.as_deref(),
-                                        ) {
-                                            (Some(account_id), Some(chatgpt_user_id)) => {
-                                                match tokio::time::timeout(
-                                                    ACCOUNT_METADATA_FETCH_TIMEOUT,
-                                                    client.get_current_account_group_names(
-                                                        account_id,
-                                                        chatgpt_user_id,
-                                                    ),
-                                                )
-                                                .await
-                                                {
-                                                    Ok(Ok(names)) => names,
-                                                    Ok(Err(err)) => {
-                                                        tracing::debug!(
-                                                            "failed to fetch ChatGPT account groups: {err}"
-                                                        );
-                                                        None
-                                                    }
-                                                    Err(err) => {
-                                                        tracing::debug!(
-                                                            "timed out fetching ChatGPT account groups: {err}"
-                                                        );
-                                                        None
+                                        let account_group_names = if account_display_name.is_some()
+                                        {
+                                            match (
+                                                account_id.as_deref(),
+                                                chatgpt_user_id.as_deref(),
+                                            ) {
+                                                (Some(account_id), Some(chatgpt_user_id)) => {
+                                                    match tokio::time::timeout(
+                                                        ACCOUNT_METADATA_FETCH_TIMEOUT,
+                                                        client.get_current_account_group_names(
+                                                            account_id,
+                                                            chatgpt_user_id,
+                                                        ),
+                                                    )
+                                                    .await
+                                                    {
+                                                        Ok(Ok(names)) => names,
+                                                        Ok(Err(err)) => {
+                                                            tracing::debug!(
+                                                                "failed to fetch ChatGPT account groups: {err}"
+                                                            );
+                                                            None
+                                                        }
+                                                        Err(err) => {
+                                                            tracing::debug!(
+                                                                "timed out fetching ChatGPT account groups: {err}"
+                                                            );
+                                                            None
+                                                        }
                                                     }
                                                 }
+                                                _ => None,
                                             }
-                                            _ => None,
+                                        } else {
+                                            None
                                         };
                                         (account_display_name, account_group_names)
                                     }
