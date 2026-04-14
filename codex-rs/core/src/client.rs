@@ -105,7 +105,7 @@ use codex_feedback::emit_feedback_request_tags_with_auth_env;
 use codex_login::api_bridge::auth_provider_from_auth;
 use codex_login::api_bridge::auth_provider_from_runtime;
 use codex_login::auth_env_telemetry::AuthEnvTelemetry;
-use codex_login::auth_env_telemetry::collect_auth_env_telemetry;
+use codex_login::auth_env_telemetry::collect_auth_env_telemetry_for_runtime;
 use codex_login::provider_auth::auth_manager_for_provider_runtime;
 use codex_model_provider::ProviderRuntime;
 use codex_model_provider::ResolvedModelProvider;
@@ -283,12 +283,11 @@ impl ModelClient {
         let codex_api_key_env_enabled = auth_manager
             .as_ref()
             .is_some_and(|manager| manager.codex_api_key_env_enabled());
-        let auth_env_provider = match &provider_runtime {
-            ProviderRuntime::Legacy => &provider,
-            ProviderRuntime::Resolved(provider) => &provider.info,
-        };
-        let auth_env_telemetry =
-            collect_auth_env_telemetry(auth_env_provider, codex_api_key_env_enabled);
+        let auth_env_telemetry = collect_auth_env_telemetry_for_runtime(
+            &provider_runtime,
+            &provider,
+            codex_api_key_env_enabled,
+        );
         Self {
             state: Arc::new(ModelClientState {
                 auth_manager,

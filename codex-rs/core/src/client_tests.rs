@@ -120,11 +120,15 @@ async fn current_client_setup_uses_resolved_runtime_provider() {
     let mut resolved_provider =
         create_oss_provider_with_base_url("https://resolved.example.com/v1", WireApi::Responses);
     resolved_provider.experimental_bearer_token = Some("resolved-token".to_string());
-    let runtime = resolve_model_provider(
+    let mut runtime = resolve_model_provider(
         "custom",
         &resolved_provider,
         &ProviderResolutionPolicy::with_enabled_provider_ids([String::from("custom")]),
     );
+    let ProviderRuntime::Resolved(provider) = &mut runtime else {
+        panic!("enabled provider should resolve through the provider framework");
+    };
+    provider.info.experimental_bearer_token = None;
     let client = ModelClient::new(
         /*auth_manager*/ None,
         ThreadId::new(),

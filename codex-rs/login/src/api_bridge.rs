@@ -1,6 +1,9 @@
 use codex_api::CoreAuthProvider;
+use codex_model_provider::ProviderAuthKind;
 use codex_model_provider::ProviderRuntime;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_protocol::error::CodexErr;
+use codex_protocol::error::EnvVarError;
 
 use crate::CodexAuth;
 
@@ -41,11 +44,60 @@ pub fn auth_provider_from_runtime(
     provider_runtime: &ProviderRuntime,
     legacy_provider: &ModelProviderInfo,
 ) -> codex_protocol::error::Result<CoreAuthProvider> {
-    let provider = match provider_runtime {
-        ProviderRuntime::Legacy => legacy_provider,
-        ProviderRuntime::Resolved(provider) => &provider.info,
-    };
-    auth_provider_from_auth(auth, provider)
+    match provider_runtime {
+        ProviderRuntime::Legacy => auth_provider_from_auth(auth, legacy_provider),
+        ProviderRuntime::Resolved(provider) => {
+            auth_provider_from_provider_auth(auth, &provider.auth)
+        }
+    }
+}
+
+pub fn auth_provider_from_provider_auth(
+    auth: Option<CodexAuth>,
+    provider_auth: &ProviderAuthKind,
+) -> codex_protocol::error::Result<CoreAuthProvider> {
+    match provider_auth {
+        ProviderAuthKind::EnvBearer {
+            env_key,
+            instructions,
+        } => {
+            let token = std::env::var(env_key)
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| {
+                    CodexErr::EnvVar(EnvVarError {
+                        var: env_key.clone(),
+                        instructions: instructions.clone(),
+                    })
+                })?;
+            Ok(CoreAuthProvider {
+                token: Some(token),
+                account_id: None,
+            })
+        }
+        ProviderAuthKind::StaticBearer { token } => Ok(CoreAuthProvider {
+            token: Some(token.clone()),
+            account_id: None,
+        }),
+        ProviderAuthKind::OpenAi | ProviderAuthKind::CommandBearer { .. } => {
+            if let Some(auth) = auth {
+                let token = auth.get_token()?;
+                Ok(CoreAuthProvider {
+                    token: Some(token),
+                    account_id: auth.get_account_id(),
+                })
+            } else {
+                Ok(CoreAuthProvider {
+                    token: None,
+                    account_id: None,
+                })
+            }
+        }
+        ProviderAuthKind::None => Ok(CoreAuthProvider {
+            token: None,
+            account_id: None,
+        }),
+    }
 }
 
 #[cfg(test)]
@@ -102,13 +154,17 @@ mod tests {
     }
 
     #[test]
-    fn runtime_auth_adapter_delegates_bearer_auth_to_legacy_provider() {
+    fn runtime_auth_adapter_uses_resolved_static_bearer_auth() {
         let provider = bearer_provider();
-        let runtime = resolve_model_provider(
+        let mut runtime = resolve_model_provider(
             "custom",
             &provider,
             &ProviderResolutionPolicy::with_enabled_provider_ids(["custom".to_string()]),
         );
+        let ProviderRuntime::Resolved(resolved) = &mut runtime else {
+            panic!("enabled provider should resolve through the provider framework");
+        };
+        resolved.info.experimental_bearer_token = None;
 
         let legacy = auth_provider_from_auth(None, &provider).expect("legacy auth");
         let resolved = auth_provider_from_runtime(None, &runtime, &provider).expect("runtime auth");
@@ -118,13 +174,18 @@ mod tests {
     }
 
     #[test]
-    fn runtime_auth_adapter_delegates_env_key_errors_to_legacy_provider() {
+    fn runtime_auth_adapter_uses_resolved_env_key_errors() {
         let provider = missing_env_key_provider();
-        let runtime = resolve_model_provider(
+        let mut runtime = resolve_model_provider(
             "custom",
             &provider,
             &ProviderResolutionPolicy::with_enabled_provider_ids(["custom".to_string()]),
         );
+        let ProviderRuntime::Resolved(resolved) = &mut runtime else {
+            panic!("enabled provider should resolve through the provider framework");
+        };
+        resolved.info.env_key = None;
+        resolved.info.env_key_instructions = None;
 
         let legacy = match auth_provider_from_auth(None, &provider) {
             Ok(_) => panic!("missing env key should fail"),

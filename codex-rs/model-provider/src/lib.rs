@@ -6,6 +6,7 @@
 
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
+use codex_protocol::config_types::ModelProviderAuthInfo;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::openai_models::ModelsResponse;
 use serde::Deserialize;
@@ -20,18 +21,13 @@ use std::time::Duration;
 pub const PROVIDER_FRAMEWORK_ENABLED_PROVIDER_IDS: &[&str] = &[];
 
 /// Runtime strategy selected for the active model provider.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum ProviderRuntime {
     /// Preserve the existing provider implementation.
+    #[default]
     Legacy,
     /// Use provider-owned runtime strategies.
-    Resolved(ResolvedModelProvider),
-}
-
-impl Default for ProviderRuntime {
-    fn default() -> Self {
-        Self::Legacy
-    }
+    Resolved(Box<ResolvedModelProvider>),
 }
 
 /// Runtime provider object resolved from config-facing provider metadata.
@@ -57,17 +53,20 @@ impl ResolvedModelProvider {
 }
 
 /// Provider-owned authentication strategy.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum ProviderAuthKind {
-    /// Preserve the existing provider-auth behavior for resolved test providers.
-    Legacy,
     /// OpenAI-managed auth.
     OpenAi,
     /// Bearer token read from a configured environment variable.
-    EnvBearer { env_key: String },
+    EnvBearer {
+        env_key: String,
+        instructions: Option<String>,
+    },
+    /// Bearer token read from provider config.
+    StaticBearer { token: String },
     /// Command-backed bearer token.
-    CommandBearer,
+    CommandBearer { config: ModelProviderAuthInfo },
     /// No provider auth is required.
     None,
 }
@@ -169,7 +168,10 @@ pub fn resolve_model_provider(
         return ProviderRuntime::Legacy;
     }
 
-    ProviderRuntime::Resolved(resolve_generic_model_provider(provider_id, provider))
+    ProviderRuntime::Resolved(Box::new(resolve_generic_model_provider(
+        provider_id,
+        provider,
+    )))
 }
 
 fn resolve_generic_model_provider(
@@ -179,7 +181,7 @@ fn resolve_generic_model_provider(
     ResolvedModelProvider {
         id: provider_id.to_string(),
         info: provider.clone(),
-        auth: ProviderAuthKind::Legacy,
+        auth: resolve_provider_auth(provider),
         model_catalog: ProviderModelCatalog::Legacy,
         transport: ProviderTransport {
             base_url: provider.base_url.clone(),
@@ -188,6 +190,27 @@ fn resolve_generic_model_provider(
             supports_websockets: provider.supports_websockets,
         },
         capabilities: ProviderCapabilities::legacy_current_behavior(),
+    }
+}
+
+fn resolve_provider_auth(provider: &ModelProviderInfo) -> ProviderAuthKind {
+    if let Some(env_key) = &provider.env_key {
+        ProviderAuthKind::EnvBearer {
+            env_key: env_key.clone(),
+            instructions: provider.env_key_instructions.clone(),
+        }
+    } else if let Some(token) = &provider.experimental_bearer_token {
+        ProviderAuthKind::StaticBearer {
+            token: token.clone(),
+        }
+    } else if let Some(config) = &provider.auth {
+        ProviderAuthKind::CommandBearer {
+            config: config.clone(),
+        }
+    } else if provider.requires_openai_auth {
+        ProviderAuthKind::OpenAi
+    } else {
+        ProviderAuthKind::None
     }
 }
 
@@ -318,11 +341,89 @@ mod tests {
         };
         assert_eq!(resolved.id, OPENAI_PROVIDER_ID);
         assert_eq!(resolved.info, *provider);
-        assert_eq!(resolved.auth, ProviderAuthKind::Legacy);
+        assert_eq!(resolved.auth, ProviderAuthKind::OpenAi);
         assert_eq!(resolved.model_catalog, ProviderModelCatalog::Legacy);
         assert_eq!(
             resolved.capabilities,
             ProviderCapabilities::legacy_current_behavior()
+        );
+    }
+
+    #[test]
+    fn enabled_policy_resolves_env_bearer_auth() {
+        let provider = ModelProviderInfo {
+            name: "custom".to_string(),
+            base_url: Some("https://example.com/v1".to_string()),
+            env_key: Some("CUSTOM_API_KEY".to_string()),
+            env_key_instructions: Some("set CUSTOM_API_KEY".to_string()),
+            experimental_bearer_token: None,
+            auth: None,
+            wire_api: WireApi::Responses,
+            query_params: None,
+            http_headers: None,
+            env_http_headers: None,
+            request_max_retries: None,
+            stream_max_retries: None,
+            stream_idle_timeout_ms: None,
+            websocket_connect_timeout_ms: None,
+            requires_openai_auth: false,
+            supports_websockets: false,
+        };
+        let ProviderRuntime::Resolved(resolved) = resolve_model_provider(
+            "custom",
+            &provider,
+            &ProviderResolutionPolicy::with_enabled_provider_ids(["custom".to_string()]),
+        ) else {
+            panic!("enabled provider should resolve through the provider framework");
+        };
+
+        assert_eq!(
+            resolved.auth,
+            ProviderAuthKind::EnvBearer {
+                env_key: "CUSTOM_API_KEY".to_string(),
+                instructions: Some("set CUSTOM_API_KEY".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn enabled_policy_resolves_command_bearer_auth() {
+        let auth = ModelProviderAuthInfo {
+            command: "print-token".to_string(),
+            args: Vec::new(),
+            timeout_ms: NonZeroU64::MIN,
+            refresh_interval_ms: 0,
+            cwd: AbsolutePathBuf::resolve_path_against_base(".", "/tmp"),
+        };
+        let provider = ModelProviderInfo {
+            name: "custom".to_string(),
+            base_url: Some("https://example.com/v1".to_string()),
+            env_key: None,
+            env_key_instructions: None,
+            experimental_bearer_token: None,
+            auth: Some(auth.clone()),
+            wire_api: WireApi::Responses,
+            query_params: None,
+            http_headers: None,
+            env_http_headers: None,
+            request_max_retries: None,
+            stream_max_retries: None,
+            stream_idle_timeout_ms: None,
+            websocket_connect_timeout_ms: None,
+            requires_openai_auth: false,
+            supports_websockets: false,
+        };
+        let ProviderRuntime::Resolved(resolved) = resolve_model_provider(
+            "custom",
+            &provider,
+            &ProviderResolutionPolicy::with_enabled_provider_ids(["custom".to_string()]),
+        ) else {
+            panic!("enabled provider should resolve through the provider framework");
+        };
+
+        assert_eq!(
+            resolved.auth,
+            ProviderAuthKind::CommandBearer { config: auth }
         );
     }
 

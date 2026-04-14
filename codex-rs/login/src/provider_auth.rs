@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use codex_model_provider::ProviderAuthKind;
 use codex_model_provider::ProviderRuntime;
 use codex_model_provider_info::ModelProviderInfo;
 
@@ -23,11 +24,27 @@ pub fn auth_manager_for_provider_runtime(
     provider_runtime: &ProviderRuntime,
     legacy_provider: &ModelProviderInfo,
 ) -> Option<Arc<AuthManager>> {
-    let provider = match provider_runtime {
-        ProviderRuntime::Legacy => legacy_provider,
-        ProviderRuntime::Resolved(provider) => &provider.info,
-    };
-    auth_manager_for_provider(auth_manager, provider)
+    match provider_runtime {
+        ProviderRuntime::Legacy => auth_manager_for_provider(auth_manager, legacy_provider),
+        ProviderRuntime::Resolved(provider) => {
+            auth_manager_for_provider_auth(auth_manager, &provider.auth)
+        }
+    }
+}
+
+pub fn auth_manager_for_provider_auth(
+    auth_manager: Option<Arc<AuthManager>>,
+    provider_auth: &ProviderAuthKind,
+) -> Option<Arc<AuthManager>> {
+    match provider_auth {
+        ProviderAuthKind::CommandBearer { config } => {
+            Some(AuthManager::external_bearer_only(config.clone()))
+        }
+        ProviderAuthKind::OpenAi
+        | ProviderAuthKind::EnvBearer { .. }
+        | ProviderAuthKind::StaticBearer { .. }
+        | ProviderAuthKind::None => auth_manager,
+    }
 }
 
 /// Returns an auth manager for request paths that always require authentication.
@@ -83,13 +100,17 @@ mod tests {
     }
 
     #[test]
-    fn runtime_auth_manager_adapter_delegates_command_auth_to_legacy_provider() {
+    fn runtime_auth_manager_adapter_uses_resolved_command_auth() {
         let provider = provider_with_command_auth();
-        let runtime = resolve_model_provider(
+        let mut runtime = resolve_model_provider(
             "custom",
             &provider,
             &ProviderResolutionPolicy::with_enabled_provider_ids(["custom".to_string()]),
         );
+        let ProviderRuntime::Resolved(resolved) = &mut runtime else {
+            panic!("enabled provider should resolve through the provider framework");
+        };
+        resolved.info.auth = None;
 
         assert!(auth_manager_for_provider(None, &provider).is_some());
         assert!(auth_manager_for_provider_runtime(None, &runtime, &provider).is_some());
