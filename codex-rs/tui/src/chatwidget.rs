@@ -513,6 +513,7 @@ pub(crate) enum ExternalEditorState {
 /// active work, arming the double-press quit shortcut, and requesting shutdown-first exit.
 pub(crate) struct ChatWidget {
     app_event_tx: AppEventSender,
+    event_monitors: crate::event_monitor::EventMonitorRegistry,
     codex_op_target: CodexOpTarget,
     bottom_pane: BottomPane,
     transcript: TranscriptState,
@@ -1432,6 +1433,92 @@ impl ChatWidget {
     pub(crate) fn add_error_message(&mut self, message: String) {
         self.add_to_history(history_cell::new_error_event(message));
         self.request_redraw();
+    }
+
+    /// React to a `/watch` monitor firing by submitting the standing
+    /// instruction as a turn in the current session. Reuses
+    /// [`Self::submit_user_message`] so the reaction queues behind any running
+    /// turn — the same "fire between turns" behavior as Claude's Monitor tool.
+    pub(crate) fn react_to_monitor(
+        &mut self,
+        instruction: String,
+        paths: Vec<std::path::PathBuf>,
+    ) {
+        let changed = paths
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let text = if changed.is_empty() {
+            instruction
+        } else {
+            format!("{instruction}\n\n[monitor fired — changed: {changed}]")
+        };
+        self.submit_user_message(UserMessage::from(text));
+    }
+
+    /// Handle `/watch` slash-command args: register, list, or stop a monitor.
+    pub(crate) fn handle_watch_command(&mut self, args: &str) {
+        let args = args.trim();
+        let mut parts = args.splitn(2, char::is_whitespace);
+        let first = parts.next().unwrap_or("").trim();
+        let rest = parts.next().unwrap_or("").trim();
+
+        match first {
+            "" => self.add_error_message(
+                "Usage: /watch <path> <instruction> | /watch list | /watch stop <id>".to_string(),
+            ),
+            "list" => self.add_watches_output(),
+            "stop" => match rest.parse::<u64>() {
+                Ok(id) if self.event_monitors.stop(id) => {
+                    self.add_info_message(format!("Stopped /watch monitor [{id}]."), /*hint*/ None)
+                }
+                Ok(id) => self.add_error_message(format!("No /watch monitor with id {id}.")),
+                Err(_) => self.add_error_message("Usage: /watch stop <id>".to_string()),
+            },
+            _ => {
+                if rest.is_empty() {
+                    self.add_error_message("Usage: /watch <path> <instruction>".to_string());
+                    return;
+                }
+                let raw = std::path::PathBuf::from(first);
+                let path = if raw.is_absolute() {
+                    raw
+                } else {
+                    self.config.cwd.join(raw).to_path_buf()
+                };
+                if !path.exists() {
+                    self.add_error_message(format!(
+                        "/watch: path does not exist: {}",
+                        path.display()
+                    ));
+                    return;
+                }
+                match self.event_monitors.add(
+                    path.clone(),
+                    rest.to_string(),
+                    self.app_event_tx.clone(),
+                ) {
+                    Ok(id) => self.add_info_message(
+                        format!("Watching {} (monitor [{id}]).", path.display()),
+                        Some(format!("On change: {rest}")),
+                    ),
+                    Err(err) => self.add_error_message(format!("/watch failed: {err}")),
+                }
+            }
+        }
+    }
+
+    fn add_watches_output(&mut self) {
+        if self.event_monitors.is_empty() {
+            self.add_info_message("No active /watch monitors.".to_string(), /*hint*/ None);
+            return;
+        }
+        let mut lines = String::from("Active /watch monitors:");
+        for (id, path, instruction) in self.event_monitors.list() {
+            lines.push_str(&format!("\n  [{id}] {} → {instruction}", path.display()));
+        }
+        self.add_info_message(lines, /*hint*/ None);
     }
 
     fn add_app_server_stub_message(&mut self, feature: &str) {

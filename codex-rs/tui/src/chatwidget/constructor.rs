@@ -92,6 +92,7 @@ impl ChatWidget {
         );
         let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
+            event_monitors: crate::event_monitor::EventMonitorRegistry::default(),
             frame_requester: frame_requester.clone(),
             codex_op_target,
             bottom_pane: BottomPane::new(BottomPaneParams {

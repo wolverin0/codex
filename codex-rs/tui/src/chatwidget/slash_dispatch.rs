@@ -406,6 +406,9 @@ impl ChatWidget {
             SlashCommand::Stop => {
                 self.clean_background_terminals();
             }
+            SlashCommand::Watch => {
+                self.handle_watch_command("");
+            }
             SlashCommand::MemoryDrop => {
                 self.add_app_server_stub_message("Memory maintenance");
             }
@@ -788,6 +791,9 @@ impl ChatWidget {
             SlashCommand::Pets if !trimmed.is_empty() => {
                 self.select_pet_by_id(args);
             }
+            SlashCommand::Watch if !trimmed.is_empty() => {
+                self.handle_watch_command(trimmed);
+            }
             _ => self.dispatch_command(cmd),
         }
         if source == SlashCommandDispatchSource::Live && cmd != SlashCommand::Goal {
@@ -932,6 +938,7 @@ impl ChatWidget {
             | SlashCommand::DebugConfig
             | SlashCommand::Ps
             | SlashCommand::Stop
+            | SlashCommand::Watch
             | SlashCommand::MemoryDrop
             | SlashCommand::MemoryUpdate
             | SlashCommand::Mcp

@@ -58,6 +58,9 @@ impl App {
                 )
                 .await;
             }
+            AppEvent::MonitorFired { instruction, paths } => {
+                self.chat_widget.react_to_monitor(instruction, paths);
+            }
             AppEvent::OpenResumePicker => {
                 let picker_app_server = match crate::start_app_server_for_picker(
                     &self.config,

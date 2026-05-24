@@ -203,6 +203,14 @@ pub(crate) enum AppEvent {
         text: String,
     },
 
+    /// A registered `/watch` file monitor fired: inject the standing
+    /// `instruction` into the live session so the agent reacts to the change,
+    /// the in-session equivalent of Claude Code's Monitor tool.
+    MonitorFired {
+        instruction: String,
+        paths: Vec<std::path::PathBuf>,
+    },
+
     /// Open the resume picker inside the running TUI session.
     OpenResumePicker,
 

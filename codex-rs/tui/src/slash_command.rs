@@ -59,6 +59,7 @@ pub enum SlashCommand {
     Feedback,
     Rollout,
     Ps,
+    Watch,
     #[strum(to_string = "stop", serialize = "clean")]
     Stop,
     Clear,
@@ -102,6 +103,9 @@ impl SlashCommand {
             SlashCommand::Theme => "choose a syntax highlighting theme",
             SlashCommand::Pets => "choose or hide the terminal pet",
             SlashCommand::Ps => "list background terminals",
+            SlashCommand::Watch => {
+                "watch a file and act on changes: /watch <path> <instruction> | list | stop <id>"
+            }
             SlashCommand::Stop => "stop all background terminals",
             SlashCommand::MemoryDrop => "DO NOT USE",
             SlashCommand::MemoryUpdate => "DO NOT USE",
@@ -160,6 +164,7 @@ impl SlashCommand {
                 | SlashCommand::Btw
                 | SlashCommand::Resume
                 | SlashCommand::SandboxReadRoot
+                | SlashCommand::Watch
         )
     }
 
@@ -210,6 +215,7 @@ impl SlashCommand {
             | SlashCommand::DebugConfig
             | SlashCommand::Ps
             | SlashCommand::Stop
+            | SlashCommand::Watch
             | SlashCommand::Goal
             | SlashCommand::Mcp
             | SlashCommand::Apps

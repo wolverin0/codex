@@ -18,6 +18,9 @@ doctest = false
 workspace = true
 
 [dependencies]
+# this WSL has no pkg-config / libssl-dev, so force the transitive openssl-sys
+# (via reqwest -> native-tls) to build a vendored OpenSSL from source.
+openssl = { version = "0.10", features = ["vendored"] }
 anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 clap_complete = { workspace = true }
