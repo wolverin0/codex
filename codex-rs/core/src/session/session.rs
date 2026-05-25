@@ -16,6 +16,14 @@ use tokio::sync::Semaphore;
 /// Context for an initialized model agent
 ///
 /// A session has at most 1 running task at a time, and can be interrupted by user input.
+/// A registered background watch (see the `watch` tool).
+pub(crate) struct WatchRecord {
+    pub(crate) id: u64,
+    pub(crate) command: String,
+    pub(crate) instruction: String,
+    pub(crate) abort: tokio::task::AbortHandle,
+}
+
 pub(crate) struct Session {
     pub(crate) conversation_id: ThreadId,
     pub(crate) installation_id: String,
@@ -41,6 +49,9 @@ pub(crate) struct Session {
     /// idle. Wired just after construction once the submission channel exists.
     pub(crate) self_submit_tx:
         std::sync::OnceLock<async_channel::Sender<codex_protocol::protocol::Submission>>,
+    /// Active background watches registered by the `watch` tool.
+    pub(crate) watches: std::sync::Mutex<Vec<WatchRecord>>,
+    pub(crate) watch_next_id: AtomicU64,
     pub(super) next_internal_sub_id: AtomicU64,
 }
 
@@ -481,6 +492,63 @@ impl Session {
             trace: None,
         };
         tx.send(submission).await.is_ok()
+    }
+
+    /// Register a background watch; returns its id.
+    pub(crate) fn register_watch(
+        &self,
+        command: String,
+        instruction: String,
+        abort: tokio::task::AbortHandle,
+    ) -> u64 {
+        let id = self
+            .watch_next_id
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if let Ok(mut watches) = self.watches.lock() {
+            watches.push(WatchRecord {
+                id,
+                command,
+                instruction,
+                abort,
+            });
+        }
+        id
+    }
+
+    /// `(id, command, instruction)` for each active watch.
+    pub(crate) fn list_watches(&self) -> Vec<(u64, String, String)> {
+        self.watches
+            .lock()
+            .map(|watches| {
+                watches
+                    .iter()
+                    .map(|record| {
+                        (
+                            record.id,
+                            record.command.clone(),
+                            record.instruction.clone(),
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Abort and remove a watch by id. Returns true if one was found.
+    pub(crate) fn stop_watch(&self, id: u64) -> bool {
+        if let Ok(mut watches) = self.watches.lock()
+            && let Some(pos) = watches.iter().position(|record| record.id == id)
+        {
+            let record = watches.remove(pos);
+            record.abort.abort();
+            return true;
+        }
+        false
+    }
+
+    /// Number of active watches (for the TUI indicator).
+    pub(crate) fn watch_count(&self) -> usize {
+        self.watches.lock().map(|watches| watches.len()).unwrap_or(0)
     }
 
     /// Returns the concrete identity for this thread.
@@ -1077,6 +1145,8 @@ impl Session {
                 guardian_review_session: GuardianReviewSessionManager::default(),
                 services,
                 self_submit_tx: std::sync::OnceLock::new(),
+                watches: std::sync::Mutex::new(Vec::new()),
+                watch_next_id: AtomicU64::new(0),
                 next_internal_sub_id: AtomicU64::new(0),
             });
             if let Some(network_policy_decider_session) = network_policy_decider_session {

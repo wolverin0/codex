@@ -33,6 +33,8 @@ use crate::tools::context::ToolPayload;
 use crate::tools::context::boxed_tool_output;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::handlers::watch_spec::WATCH_TOOL_NAME;
+use crate::tools::handlers::watch_spec::create_watch_list_tool;
+use crate::tools::handlers::watch_spec::create_watch_stop_tool;
 use crate::tools::handlers::watch_spec::create_watch_tool;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
@@ -108,15 +110,16 @@ impl ToolExecutor<ToolInvocation> for WatchHandler {
                 .max(MIN_INTERVAL_SECS),
         );
 
-        spawn_command_watch(
+        let abort = spawn_command_watch(
             Arc::downgrade(&session),
             command.clone(),
             instruction.clone(),
             interval,
         );
+        let id = session.register_watch(command.clone(), instruction.clone(), abort);
 
         let msg = format!(
-            "Watching `{command}` every {}s. When its output changes I will: {instruction}",
+            "Watching `{command}` (id {id}) every {}s. When its output changes I will: {instruction}",
             interval.as_secs()
         );
         Ok(boxed_tool_output(FunctionToolOutput::from_content(
@@ -135,8 +138,8 @@ fn spawn_command_watch(
     command: String,
     instruction: String,
     interval: Duration,
-) {
-    tokio::spawn(async move {
+) -> tokio::task::AbortHandle {
+    let join = tokio::spawn(async move {
         let mut last: Option<String> = None;
         loop {
             sleep(interval).await;
@@ -184,6 +187,7 @@ fn spawn_command_watch(
             }
         }
     });
+    join.abort_handle()
 }
 
 async fn run_command(command: &str) -> std::io::Result<String> {
@@ -202,3 +206,100 @@ fn truncate_chars(text: &str, max: usize) -> String {
         out
     }
 }
+
+/// `watch_list`: report the active watches so the user/agent can see what's
+/// being monitored instead of monitoring blindly.
+#[derive(Default)]
+pub struct WatchListHandler;
+
+#[async_trait::async_trait]
+impl ToolExecutor<ToolInvocation> for WatchListHandler {
+    fn tool_name(&self) -> ToolName {
+        ToolName::plain("watch_list")
+    }
+
+    fn spec(&self) -> Option<ToolSpec> {
+        Some(create_watch_list_tool())
+    }
+
+    fn supports_parallel_tool_calls(&self) -> bool {
+        true
+    }
+
+    async fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<Box<dyn ToolOutput>, FunctionCallError> {
+        let watches = invocation.session.list_watches();
+        let msg = if watches.is_empty() {
+            "No active watches.".to_string()
+        } else {
+            let mut out = String::from("Active watches:");
+            for (id, command, instruction) in watches {
+                out.push_str(&format!("\n  [{id}] `{command}` -> {instruction}"));
+            }
+            out
+        };
+        Ok(boxed_tool_output(FunctionToolOutput::from_content(
+            vec![FunctionCallOutputContentItem::InputText { text: msg }],
+            Some(true),
+        )))
+    }
+}
+
+impl CoreToolRuntime for WatchListHandler {}
+
+/// `watch_stop`: stop an active watch by id.
+#[derive(Default)]
+pub struct WatchStopHandler;
+
+#[derive(Deserialize)]
+struct WatchStopArgs {
+    id: u64,
+}
+
+#[async_trait::async_trait]
+impl ToolExecutor<ToolInvocation> for WatchStopHandler {
+    fn tool_name(&self) -> ToolName {
+        ToolName::plain("watch_stop")
+    }
+
+    fn spec(&self) -> Option<ToolSpec> {
+        Some(create_watch_stop_tool())
+    }
+
+    fn supports_parallel_tool_calls(&self) -> bool {
+        true
+    }
+
+    async fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<Box<dyn ToolOutput>, FunctionCallError> {
+        let ToolInvocation {
+            session, payload, ..
+        } = invocation;
+
+        let arguments = match payload {
+            ToolPayload::Function { arguments } => arguments,
+            _ => {
+                return Err(FunctionCallError::RespondToModel(
+                    "watch_stop received unsupported payload".to_string(),
+                ));
+            }
+        };
+
+        let WatchStopArgs { id } = parse_arguments(&arguments)?;
+        let msg = if session.stop_watch(id) {
+            format!("Stopped watch [{id}].")
+        } else {
+            format!("No active watch with id {id}.")
+        };
+        Ok(boxed_tool_output(FunctionToolOutput::from_content(
+            vec![FunctionCallOutputContentItem::InputText { text: msg }],
+            Some(true),
+        )))
+    }
+}
+
+impl CoreToolRuntime for WatchStopHandler {}

@@ -56,3 +56,35 @@ pub fn create_watch_tool() -> ToolSpec {
         output_schema: None,
     })
 }
+
+/// `watch_list` tool: report active watches (no parameters).
+pub fn create_watch_list_tool() -> ToolSpec {
+    ToolSpec::Function(ResponsesApiTool {
+        name: "watch_list".to_string(),
+        description: "List the active watches (what is currently being monitored), with their \
+                      ids, commands, and instructions."
+            .to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::object(BTreeMap::new(), None, Some(false.into())),
+        output_schema: None,
+    })
+}
+
+/// `watch_stop` tool: stop an active watch by id.
+pub fn create_watch_stop_tool() -> ToolSpec {
+    let properties = BTreeMap::from([(
+        "id".to_string(),
+        JsonSchema::number(Some(
+            "The id of the watch to stop (as shown by watch_list).".to_string(),
+        )),
+    )]);
+    ToolSpec::Function(ResponsesApiTool {
+        name: "watch_stop".to_string(),
+        description: "Stop an active watch by its id.".to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::object(properties, Some(vec!["id".to_string()]), Some(false.into())),
+        output_schema: None,
+    })
+}
