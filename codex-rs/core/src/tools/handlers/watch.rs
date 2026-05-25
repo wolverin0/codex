@@ -18,8 +18,11 @@ use tokio::time::sleep;
 use tracing::warn;
 
 use codex_protocol::models::FunctionCallOutputContentItem;
+use codex_protocol::protocol::Event;
+use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ThreadSettingsOverrides;
+use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
@@ -117,6 +120,17 @@ impl ToolExecutor<ToolInvocation> for WatchHandler {
             interval,
         );
         let id = session.register_watch(command.clone(), instruction.clone(), abort);
+        session
+            .send_event_raw(Event {
+                id: String::new(),
+                msg: EventMsg::Warning(WarningEvent {
+                    message: format!(
+                        "👁 watch [{id}] active: `{command}` — {} watch(es) running",
+                        session.watch_count()
+                    ),
+                }),
+            })
+            .await;
 
         let msg = format!(
             "Watching `{command}` (id {id}) every {}s. When its output changes I will: {instruction}",
@@ -291,10 +305,22 @@ impl ToolExecutor<ToolInvocation> for WatchStopHandler {
 
         let WatchStopArgs { id } = parse_arguments(&arguments)?;
         let msg = if session.stop_watch(id) {
+            session
+                .send_event_raw(Event {
+                    id: String::new(),
+                    msg: EventMsg::Warning(WarningEvent {
+                        message: format!(
+                            "👁 watch [{id}] stopped — {} watch(es) running",
+                            session.watch_count()
+                        ),
+                    }),
+                })
+                .await;
             format!("Stopped watch [{id}].")
         } else {
             format!("No active watch with id {id}.")
         };
+
         Ok(boxed_tool_output(FunctionToolOutput::from_content(
             vec![FunctionCallOutputContentItem::InputText { text: msg }],
             Some(true),
