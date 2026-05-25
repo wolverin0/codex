@@ -154,7 +154,15 @@ fn spawn_command_watch(
     interval: Duration,
 ) -> tokio::task::AbortHandle {
     let join = tokio::spawn(async move {
-        let mut last: Option<String> = None;
+        // `prev_poll` is the previous poll's output (used to detect when the
+        // source has SETTLED). `last_fired` is the output we last reacted to. We
+        // only react once the output has stopped changing for a full interval
+        // AND differs from the last reaction — this collapses a burst of
+        // intermediate changes (e.g. a streaming pane that updates on every
+        // token, or a multi-write save) into a SINGLE reaction instead of firing
+        // on every micro-change.
+        let mut prev_poll: Option<String> = None;
+        let mut last_fired: Option<String> = None;
         loop {
             sleep(interval).await;
             let Some(session) = session.upgrade() else {
@@ -169,17 +177,25 @@ fn spawn_command_watch(
                 }
             };
 
-            match last {
-                // First poll establishes the baseline without firing.
-                None => last = Some(output),
-                // Unchanged: nothing to do.
+            // Require two consecutive identical polls (the source has quiesced)
+            // before considering a reaction.
+            let settled = prev_poll.as_deref() == Some(output.as_str());
+            prev_poll = Some(output.clone());
+            if !settled {
+                continue;
+            }
+
+            match last_fired {
+                // First settled state is the baseline; do not react to it.
+                None => last_fired = Some(output),
+                // Settled but unchanged since the last reaction.
                 Some(ref prev) if *prev == output => {}
-                // Changed: start a fresh turn so the agent reacts in this
-                // session. submit_self works even when the agent is idle
-                // (interactive + headless), unlike a trigger_turn mailbox which
-                // only appends to an already-active turn.
+                // Settled into a genuinely new state: react once via
+                // submit_self, which starts a fresh turn even when the agent is
+                // idle (interactive + headless), unlike a trigger_turn mailbox
+                // which only appends to an already-active turn.
                 Some(_) => {
-                    last = Some(output.clone());
+                    last_fired = Some(output.clone());
                     let text = format!(
                         "{instruction}\n\n[watch fired — `{command}` output changed]\n{}",
                         truncate_chars(&output, MAX_OUTPUT_CHARS)
