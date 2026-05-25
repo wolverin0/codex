@@ -655,6 +655,7 @@ impl Codex {
             error!("Failed to create session: {e:#}");
             map_session_init_error(&e, &config.codex_home)
         })?;
+        let _ = session.self_submit_tx.set(tx_sub.clone());
         let thread_id = session.conversation_id;
 
         // This task will run until Op::Shutdown is received.

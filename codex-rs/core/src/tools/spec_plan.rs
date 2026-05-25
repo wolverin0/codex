@@ -2,6 +2,7 @@ use crate::session::turn_context::TurnContext;
 use crate::tools::code_mode::execute_spec::create_code_mode_tool;
 use crate::tools::context::ToolInvocation;
 use crate::tools::handlers::ApplyPatchHandler;
+use crate::tools::handlers::WatchHandler;
 use crate::tools::handlers::CodeModeExecuteHandler;
 use crate::tools::handlers::CodeModeWaitHandler;
 use crate::tools::handlers::CreateGoalHandler;
@@ -562,6 +563,10 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut
             include_environment_id,
         }));
     }
+
+    // The model-callable `watch` tool is always available so the agent can set
+    // up a reactive watch from natural language, regardless of environment mode.
+    planned_tools.add_runtime(WatchHandler::default());
 }
 
 fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut PlannedTools) {

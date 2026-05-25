@@ -36,6 +36,11 @@ pub(crate) struct Session {
     pub(crate) goal_runtime: GoalRuntimeState,
     pub(crate) guardian_review_session: GuardianReviewSessionManager,
     pub(crate) services: SessionServices,
+    /// Sender into this session's own submission loop, so background tasks
+    /// (e.g. the `watch` tool) can start a fresh turn even when the agent is
+    /// idle. Wired just after construction once the submission channel exists.
+    pub(crate) self_submit_tx:
+        std::sync::OnceLock<async_channel::Sender<codex_protocol::protocol::Submission>>,
     pub(super) next_internal_sub_id: AtomicU64,
 }
 
@@ -462,6 +467,22 @@ async fn warm_plugins_and_skills_for_session_init(
 }
 
 impl Session {
+    /// Start a fresh turn in THIS session from a background task (e.g. the
+    /// `watch` tool), even when the agent is idle. Sends an `Op::UserInput`
+    /// submission into the session's own submission loop. Returns false if the
+    /// self-submission sender has not been wired yet.
+    pub(crate) async fn submit_self(&self, op: codex_protocol::protocol::Op) -> bool {
+        let Some(tx) = self.self_submit_tx.get() else {
+            return false;
+        };
+        let submission = codex_protocol::protocol::Submission {
+            id: uuid::Uuid::now_v7().to_string(),
+            op,
+            trace: None,
+        };
+        tx.send(submission).await.is_ok()
+    }
+
     /// Returns the concrete identity for this thread.
     pub(crate) fn thread_id(&self) -> ThreadId {
         self.conversation_id
@@ -1055,6 +1076,7 @@ impl Session {
                 goal_runtime: GoalRuntimeState::new(),
                 guardian_review_session: GuardianReviewSessionManager::default(),
                 services,
+                self_submit_tx: std::sync::OnceLock::new(),
                 next_internal_sub_id: AtomicU64::new(0),
             });
             if let Some(network_policy_decider_session) = network_policy_decider_session {
