@@ -47,6 +47,10 @@ const DEFAULT_INTERVAL_SECS: u64 = 10;
 /// Cap the changed-output context delivered to the model so one watch tick
 /// cannot blow the context window.
 const MAX_OUTPUT_CHARS: usize = 4000;
+/// Maximum concurrent watches per session.
+const MAX_WATCHES: usize = 8;
+/// Auto-stop a watch after this many consecutive command failures.
+const MAX_CONSECUTIVE_FAILURES: u32 = 5;
 
 #[derive(Default)]
 pub struct WatchHandler;
@@ -78,7 +82,10 @@ impl ToolExecutor<ToolInvocation> for WatchHandler {
         invocation: ToolInvocation,
     ) -> Result<Box<dyn ToolOutput>, FunctionCallError> {
         let ToolInvocation {
-            session, payload, ..
+            session,
+            turn,
+            payload,
+            ..
         } = invocation;
 
         let arguments = match payload {
@@ -89,6 +96,12 @@ impl ToolExecutor<ToolInvocation> for WatchHandler {
                 ));
             }
         };
+
+        if session.watch_count() >= MAX_WATCHES {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "watch limit reached ({MAX_WATCHES} active); stop one with watch_stop first."
+            )));
+        }
 
         let WatchArgs {
             command,
@@ -113,11 +126,14 @@ impl ToolExecutor<ToolInvocation> for WatchHandler {
                 .max(MIN_INTERVAL_SECS),
         );
 
+        // Confine the background poll to the turn's working directory.
+        let cwd = turn.cwd.as_path().to_path_buf();
         let abort = spawn_command_watch(
             Arc::downgrade(&session),
             command.clone(),
             instruction.clone(),
             interval,
+            cwd,
         );
         let id = session.register_watch(command.clone(), instruction.clone(), abort);
         session
@@ -152,30 +168,52 @@ fn spawn_command_watch(
     command: String,
     instruction: String,
     interval: Duration,
+    cwd: std::path::PathBuf,
 ) -> tokio::task::AbortHandle {
     let join = tokio::spawn(async move {
-        // `prev_poll` is the previous poll's output (used to detect when the
-        // source has SETTLED). `last_fired` is the output we last reacted to. We
-        // only react once the output has stopped changing for a full interval
-        // AND differs from the last reaction — this collapses a burst of
-        // intermediate changes (e.g. a streaming pane that updates on every
-        // token, or a multi-write save) into a SINGLE reaction instead of firing
-        // on every micro-change.
+        // `prev_poll` is the previous poll's output (settle detection);
+        // `last_fired` is the output we last reacted to. We only react once the
+        // output has stopped changing for a full interval AND differs from the
+        // last reaction — collapsing a burst (e.g. a streaming pane that updates
+        // on every token, or a multi-write save) into a SINGLE reaction.
         let mut prev_poll: Option<String> = None;
         let mut last_fired: Option<String> = None;
+        let mut consecutive_failures: u32 = 0;
         loop {
             sleep(interval).await;
             let Some(session) = session.upgrade() else {
                 break;
             };
 
-            let output = match run_command(&command).await {
-                Ok(output) => output,
-                Err(error) => {
-                    warn!("watch: command `{command}` failed: {error}");
-                    continue;
-                }
+            let (ok, out) = match run_command(&command, &cwd).await {
+                Ok(pair) => pair,
+                Err(error) => (false, error.to_string()),
             };
+            if !ok {
+                consecutive_failures += 1;
+                warn!(
+                    "watch: command `{command}` failed \
+                     ({consecutive_failures}/{MAX_CONSECUTIVE_FAILURES}): {}",
+                    truncate_chars(&out, 200)
+                );
+                if consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
+                    let _ = session
+                        .send_event_raw(Event {
+                            id: String::new(),
+                            msg: EventMsg::Warning(WarningEvent {
+                                message: format!(
+                                    "👁 watch auto-stopped after {MAX_CONSECUTIVE_FAILURES} \
+                                     consecutive failures: `{command}`"
+                                ),
+                            }),
+                        })
+                        .await;
+                    break;
+                }
+                continue;
+            }
+            consecutive_failures = 0;
+            let output = out;
 
             // Require two consecutive identical polls (the source has quiesced)
             // before considering a reaction.
@@ -190,15 +228,15 @@ fn spawn_command_watch(
                 None => last_fired = Some(output),
                 // Settled but unchanged since the last reaction.
                 Some(ref prev) if *prev == output => {}
-                // Settled into a genuinely new state: react once via
-                // submit_self, which starts a fresh turn even when the agent is
-                // idle (interactive + headless), unlike a trigger_turn mailbox
-                // which only appends to an already-active turn.
-                Some(_) => {
+                // Settled into a genuinely new state: react once. Deliver only
+                // the DIFF (what changed) instead of the whole capture, via
+                // submit_self (starts a fresh turn even when the agent is idle).
+                Some(ref prev) => {
+                    let diff = diff_lines(prev, &output);
                     last_fired = Some(output.clone());
                     let text = format!(
                         "{instruction}\n\n[watch fired — `{command}` output changed]\n{}",
-                        truncate_chars(&output, MAX_OUTPUT_CHARS)
+                        truncate_chars(&diff, MAX_OUTPUT_CHARS)
                     );
                     let op = Op::UserInput {
                         items: vec![UserInput::Text {
@@ -213,6 +251,9 @@ fn spawn_command_watch(
                     if !session.submit_self(op).await {
                         warn!("watch: self-submit sender unavailable; reaction dropped");
                     }
+                    // Cooldown: give the reaction room to run before polling
+                    // again, so reactions don't stack while one is in flight.
+                    sleep(interval * 3).await;
                 }
             }
         }
@@ -220,11 +261,43 @@ fn spawn_command_watch(
     join.abort_handle()
 }
 
-async fn run_command(command: &str) -> std::io::Result<String> {
-    let output = Command::new("sh").arg("-c").arg(command).output().await?;
+/// Run the poll command in the watch's working directory. Returns
+/// `(success, combined stdout+stderr)`. A non-zero exit reports `false` so the
+/// caller can count it toward auto-stop.
+async fn run_command(command: &str, cwd: &std::path::Path) -> std::io::Result<(bool, String)> {
+    let output = Command::new("sh")
+        .arg("-c")
+        .arg(command)
+        .current_dir(cwd)
+        .output()
+        .await?;
     let mut combined = String::from_utf8_lossy(&output.stdout).into_owned();
     combined.push_str(&String::from_utf8_lossy(&output.stderr));
-    Ok(combined)
+    Ok((output.status.success(), combined))
+}
+
+/// Compact line diff (added `+`/removed `-` lines) between two captures, so the
+/// agent receives what CHANGED rather than the whole output. Falls back to the
+/// new output when the change is only reordering/whitespace.
+fn diff_lines(old: &str, new: &str) -> String {
+    let old_lines: std::collections::HashSet<&str> = old.lines().collect();
+    let new_lines: std::collections::HashSet<&str> = new.lines().collect();
+    let mut out = String::new();
+    for line in new.lines() {
+        if !old_lines.contains(line) {
+            out.push_str("+ ");
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    for line in old.lines() {
+        if !new_lines.contains(line) {
+            out.push_str("- ");
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    if out.is_empty() { new.to_string() } else { out }
 }
 
 fn truncate_chars(text: &str, max: usize) -> String {
