@@ -494,16 +494,22 @@ impl Session {
         tx.send(submission).await.is_ok()
     }
 
-    /// Register a background watch; returns its id.
-    pub(crate) fn register_watch(
+    /// Pre-allocate the next watch id so callers can pass it into the spawned
+    /// task BEFORE finishing registration (the task uses the id to
+    /// self-deregister on auto-stop).
+    pub(crate) fn allocate_watch_id(&self) -> u64 {
+        self.watch_next_id
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Register a background watch under a pre-allocated id.
+    pub(crate) fn register_watch_with_id(
         &self,
+        id: u64,
         command: String,
         instruction: String,
         abort: tokio::task::AbortHandle,
-    ) -> u64 {
-        let id = self
-            .watch_next_id
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    ) {
         if let Ok(mut watches) = self.watches.lock() {
             watches.push(WatchRecord {
                 id,
@@ -512,7 +518,19 @@ impl Session {
                 abort,
             });
         }
-        id
+    }
+
+    /// Remove a watch entry by id WITHOUT aborting (caller is the task itself,
+    /// which is about to exit on its own). Used by the auto-stop branch so a
+    /// stopped watch no longer counts against the cap or appears in watch_list.
+    pub(crate) fn deregister_watch(&self, id: u64) -> bool {
+        if let Ok(mut watches) = self.watches.lock()
+            && let Some(pos) = watches.iter().position(|r| r.id == id)
+        {
+            watches.remove(pos);
+            return true;
+        }
+        false
     }
 
     /// `(id, command, instruction)` for each active watch.

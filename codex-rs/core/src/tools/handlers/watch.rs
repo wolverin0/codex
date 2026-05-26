@@ -128,14 +128,17 @@ impl ToolExecutor<ToolInvocation> for WatchHandler {
 
         // Confine the background poll to the turn's working directory.
         let cwd = turn.cwd.as_path().to_path_buf();
+        // Pre-allocate the id so the task can self-deregister on auto-stop.
+        let id = session.allocate_watch_id();
         let abort = spawn_command_watch(
             Arc::downgrade(&session),
+            id,
             command.clone(),
             instruction.clone(),
             interval,
             cwd,
         );
-        let id = session.register_watch(command.clone(), instruction.clone(), abort);
+        session.register_watch_with_id(id, command.clone(), instruction.clone(), abort);
         session
             .send_event_raw(Event {
                 id: String::new(),
@@ -165,6 +168,7 @@ impl CoreToolRuntime for WatchHandler {}
 /// keeps the session alive; the loop exits once the session is dropped.
 fn spawn_command_watch(
     session: Weak<Session>,
+    id: u64,
     command: String,
     instruction: String,
     interval: Duration,
@@ -217,6 +221,9 @@ fn spawn_command_watch(
                         thread_settings: ThreadSettingsOverrides::default(),
                     };
                     let _ = session.submit_self(op).await;
+                    // Self-deregister so the slot is freed and watch_list no
+                    // longer claims this watch is active.
+                    session.deregister_watch(id);
                     break;
                 }
                 continue;
@@ -291,16 +298,20 @@ async fn run_command(command: &str, cwd: &std::path::Path) -> std::io::Result<(b
 fn diff_lines(old: &str, new: &str) -> String {
     let old_lines: std::collections::HashSet<&str> = old.lines().collect();
     let new_lines: std::collections::HashSet<&str> = new.lines().collect();
+    // Dedupe within each side while preserving first-seen order — repeated
+    // identical lines (e.g. five identical log appends) print as ONE `+` row.
+    let mut printed_add = std::collections::HashSet::new();
+    let mut printed_rem = std::collections::HashSet::new();
     let mut out = String::new();
     for line in new.lines() {
-        if !old_lines.contains(line) {
+        if !old_lines.contains(line) && printed_add.insert(line) {
             out.push_str("+ ");
             out.push_str(line);
             out.push('\n');
         }
     }
     for line in old.lines() {
-        if !new_lines.contains(line) {
+        if !new_lines.contains(line) && printed_rem.insert(line) {
             out.push_str("- ");
             out.push_str(line);
             out.push('\n');
