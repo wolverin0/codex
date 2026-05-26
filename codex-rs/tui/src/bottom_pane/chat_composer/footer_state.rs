@@ -34,6 +34,9 @@ pub(super) struct FooterState {
     /// `codex-core::tools::handlers::watch`). When `Some(n)` and `n > 0`, the
     /// footer renders a `· N watch` chip so the user knows watches are armed.
     pub(super) active_watch_count: Option<usize>,
+    /// Command of the single active watch, used to expand the chip from
+    /// `· 1 watch` to `· watch: <cmd>` when exactly one watch is active.
+    pub(super) active_watch_command: Option<String>,
     pub(super) external_editor_key: Option<KeyBinding>,
     pub(super) show_transcript_key: Option<KeyBinding>,
     pub(super) insert_newline_key: Option<KeyBinding>,

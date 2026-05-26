@@ -507,6 +507,7 @@ impl ChatComposer {
                 side_conversation_context_label: None,
                 active_agent_label: None,
                 active_watch_count: None,
+                active_watch_command: None,
                 external_editor_key: Some(key_hint::ctrl(KeyCode::Char('g'))),
                 show_transcript_key: Some(key_hint::ctrl(KeyCode::Char('t'))),
                 insert_newline_key: footer_insert_newline_key(
@@ -3578,6 +3579,7 @@ impl ChatComposer {
             },
             active_agent_label: self.footer.active_agent_label.clone(),
             active_watch_count: self.footer.active_watch_count,
+            active_watch_command: self.footer.active_watch_command.clone(),
         }
     }
 
@@ -4227,6 +4229,16 @@ impl ChatComposer {
             return false;
         }
         self.footer.active_watch_count = normalized;
+        true
+    }
+
+    /// Set the command shown in the expanded single-watch chip. Caller
+    /// should pass `Some(cmd)` only when exactly one watch is active.
+    pub(crate) fn set_active_watch_command(&mut self, command: Option<String>) -> bool {
+        if self.footer.active_watch_command == command {
+            return false;
+        }
+        self.footer.active_watch_command = command;
         true
     }
 }

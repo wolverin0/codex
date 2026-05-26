@@ -1695,6 +1695,13 @@ impl BottomPane {
         }
     }
 
+    /// Update the inline command shown next to the single-watch chip.
+    pub(crate) fn set_active_watch_command(&mut self, command: Option<String>) {
+        if self.composer.set_active_watch_command(command) {
+            self.request_redraw();
+        }
+    }
+
     pub(crate) fn set_side_conversation_context_label(&mut self, label: Option<String>) {
         if self.composer.set_side_conversation_context_label(label) {
             self.request_redraw();

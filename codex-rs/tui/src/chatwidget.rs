@@ -514,6 +514,11 @@ pub(crate) enum ExternalEditorState {
 pub(crate) struct ChatWidget {
     app_event_tx: AppEventSender,
     event_monitors: crate::event_monitor::EventMonitorRegistry,
+    /// Mirror of the core-side `watch` tool registry, populated by parsing
+    /// the lifecycle Warning events. Drives `/watch` overlay rendering so
+    /// the user can SEE what is being watched without scrolling history.
+    /// Maps watch id → `(command, instruction)`.
+    core_watches_mirror: std::collections::BTreeMap<u64, (String, String)>,
     codex_op_target: CodexOpTarget,
     bottom_pane: BottomPane,
     transcript: TranscriptState,
@@ -1465,10 +1470,14 @@ impl ChatWidget {
         let rest = parts.next().unwrap_or("").trim();
 
         match first {
-            "" => self.add_error_message(
-                "Usage: /watch <path> <instruction> | /watch list | /watch stop <id>".to_string(),
-            ),
-            "list" => self.add_watches_output(),
+            // `/watch` with no args now renders the active watch list so the
+            // user can SEE what's being watched without scrolling — the
+            // statusline chip tells them how many, this tells them which.
+            "" => self.add_core_watches_output(),
+            "list" => {
+                self.add_watches_output();
+                self.add_core_watches_output();
+            }
             "stop" => match rest.parse::<u64>() {
                 Ok(id) if self.event_monitors.stop(id) => {
                     self.add_info_message(format!("Stopped /watch monitor [{id}]."), /*hint*/ None)
@@ -1519,6 +1528,35 @@ impl ChatWidget {
             lines.push_str(&format!("\n  [{id}] {} → {instruction}", path.display()));
         }
         self.add_info_message(lines, /*hint*/ None);
+    }
+
+    /// Render the active core-side watch tool registrations as an info cell.
+    /// Sourced from `core_watches_mirror` which is kept in sync with the
+    /// core `Session.watches` by parsing lifecycle Warning events. This is
+    /// the codex equivalent of Claude Code Monitor's detail panel.
+    fn add_core_watches_output(&mut self) {
+        if self.core_watches_mirror.is_empty() {
+            self.add_info_message(
+                "No active watches. Ask Codex to register one with the `watch` tool.".to_string(),
+                /*hint*/ None,
+            );
+            return;
+        }
+        let mut lines = format!(
+            "Active watches ({}):",
+            self.core_watches_mirror.len()
+        );
+        for (id, (command, instruction)) in &self.core_watches_mirror {
+            if instruction.is_empty() {
+                lines.push_str(&format!("\n  [{id}] `{command}`"));
+            } else {
+                lines.push_str(&format!("\n  [{id}] `{command}` → {instruction}"));
+            }
+        }
+        self.add_info_message(
+            lines,
+            Some("Stop one by asking Codex to call watch_stop with its id.".to_string()),
+        );
     }
 
     fn add_app_server_stub_message(&mut self, feature: &str) {
@@ -1984,6 +2022,60 @@ const SIDE_PLACEHOLDERS: [&str; 3] = [
     "How many files have been modified?",
     "Will this algorithm scale well?",
 ];
+
+/// Outcome of parsing a `👁 watch [...]` lifecycle Warning message. Drives
+/// both the footer chip and the TUI-side watch-registry mirror.
+pub(crate) enum WatchLifecycleEvent {
+    Registered {
+        id: u64,
+        command: String,
+        instruction: String,
+        count: usize,
+    },
+    Stopped {
+        id: u64,
+        count: usize,
+    },
+}
+
+/// Try to parse a watch-tool lifecycle Warning. Returns `None` if the message
+/// is some other unrelated Warning. Matches:
+///   `👁 watch [<id>] active: ``<cmd>`` → <instruction> — <N> watch(es) running`
+///   `👁 watch [<id>] stopped — <N> watch(es) running`
+pub(crate) fn parse_watch_lifecycle(message: &str) -> Option<WatchLifecycleEvent> {
+    if !message.contains("👁") || !message.contains("watch(es) running") {
+        return None;
+    }
+    let count = parse_watch_count(message)?;
+    let id_start = message.find('[')? + 1;
+    let id_end = id_start + message[id_start..].find(']')?;
+    let id: u64 = message[id_start..id_end].parse().ok()?;
+    let after_id = &message[id_end + 1..];
+    if after_id.contains(" stopped ") {
+        Some(WatchLifecycleEvent::Stopped { id, count })
+    } else if after_id.contains(" active: ") {
+        let cmd_start = after_id.find('`')? + 1;
+        let cmd_end = cmd_start + after_id[cmd_start..].find('`')?;
+        let command = after_id[cmd_start..cmd_end].to_string();
+        let rest = &after_id[cmd_end + 1..];
+        // Expect " → <instruction> — N watch(es) running"
+        let instruction = rest
+            .find(" → ")
+            .and_then(|i| {
+                let after = &rest[i + " → ".len()..];
+                after.find(" — ").map(|j| after[..j].trim().to_string())
+            })
+            .unwrap_or_default();
+        Some(WatchLifecycleEvent::Registered {
+            id,
+            command,
+            instruction,
+            count,
+        })
+    } else {
+        None
+    }
+}
 
 // Extract the trailing watch count from a watch-tool lifecycle Warning
 // message. Matches the pattern `— <N> watch(es) running` and returns N.

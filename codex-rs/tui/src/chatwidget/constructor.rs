@@ -93,6 +93,7 @@ impl ChatWidget {
         let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
             event_monitors: crate::event_monitor::EventMonitorRegistry::default(),
+            core_watches_mirror: std::collections::BTreeMap::new(),
             frame_requester: frame_requester.clone(),
             codex_op_target,
             bottom_pane: BottomPane::new(BottomPaneParams {

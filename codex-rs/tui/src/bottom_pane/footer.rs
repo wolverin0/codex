@@ -86,6 +86,10 @@ pub(crate) struct FooterProps {
     /// Optional `· N watch` chip rendered next to the status line. Set when at
     /// least one core-side `watch` tool registration is active in the session.
     pub(crate) active_watch_count: Option<usize>,
+    /// When exactly one watch is active, the rendered chip shows
+    /// `· watch: <command>` instead of `· 1 watch`. None when 0 or 2+
+    /// watches are active. Drives the single-watch UX expansion only.
+    pub(crate) active_watch_command: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -798,10 +802,14 @@ pub(crate) fn passive_footer_status_line(props: &FooterProps) -> Option<Line<'st
     }
 
     if let Some(n) = props.active_watch_count.filter(|n| *n > 0) {
-        let chip = if n == 1 {
-            "1 watch".to_string()
-        } else {
-            format!("{n} watches")
+        // When only one watch is active, render the command inline
+        // (`· watch: <cmd>`) so the user sees WHAT is being watched without
+        // typing `/watch`. With 2+, fall back to the compact count chip; the
+        // user can type `/watch` to see the full list.
+        let chip = match (n, props.active_watch_command.as_deref()) {
+            (1, Some(cmd)) if !cmd.is_empty() => format!("watch: {cmd}"),
+            (1, _) => "1 watch".to_string(),
+            (n, _) => format!("{n} watches"),
         };
         if let Some(existing) = line.as_mut() {
             existing.spans.push(" · ".dim());
@@ -1567,6 +1575,7 @@ mod tests {
                 key_hints: FooterKeyHints::default_bindings(),
                 active_agent_label: None,
                 active_watch_count: None,
+                active_watch_command: None,
             },
         );
 
@@ -1588,6 +1597,7 @@ mod tests {
                 },
                 active_agent_label: None,
                 active_watch_count: None,
+                active_watch_command: None,
             },
         );
 
@@ -1606,6 +1616,7 @@ mod tests {
                 key_hints: FooterKeyHints::default_bindings(),
                 active_agent_label: None,
                 active_watch_count: None,
+                active_watch_command: None,
             },
         );
 
@@ -1624,6 +1635,7 @@ mod tests {
                 key_hints: FooterKeyHints::default_bindings(),
                 active_agent_label: None,
                 active_watch_count: None,
+                active_watch_command: None,
             },
         );
 
@@ -1642,6 +1654,7 @@ mod tests {
                 key_hints: FooterKeyHints::default_bindings(),
                 active_agent_label: None,
                 active_watch_count: None,
+                active_watch_command: None,
             },
         );
 
@@ -1660,6 +1673,7 @@ mod tests {
                 key_hints: FooterKeyHints::default_bindings(),
                 active_agent_label: None,
                 active_watch_count: None,
+                active_watch_command: None,
             },
         );
 
@@ -1678,6 +1692,7 @@ mod tests {
                 key_hints: FooterKeyHints::default_bindings(),
                 active_agent_label: None,
                 active_watch_count: None,
+                active_watch_command: None,
             },
         );
 
@@ -1696,6 +1711,7 @@ mod tests {
                 key_hints: FooterKeyHints::default_bindings(),
                 active_agent_label: None,
                 active_watch_count: None,
+                active_watch_command: None,
             },
             Some(72),
             /*used_tokens*/ None,
@@ -1716,6 +1732,7 @@ mod tests {
                 key_hints: FooterKeyHints::default_bindings(),
                 active_agent_label: None,
                 active_watch_count: None,
+                active_watch_command: None,
             },
             /*percent*/ None,
             Some(123_456),
@@ -1736,6 +1753,7 @@ mod tests {
                 key_hints: FooterKeyHints::default_bindings(),
                 active_agent_label: None,
                 active_watch_count: None,
+                active_watch_command: None,
             },
         );
 
@@ -1752,6 +1770,7 @@ mod tests {
             key_hints: FooterKeyHints::default_bindings(),
             active_agent_label: None,
             active_watch_count: None,
+            active_watch_command: None,
         };
 
         snapshot_footer_with_mode_indicator(
@@ -1781,6 +1800,7 @@ mod tests {
             key_hints: FooterKeyHints::default_bindings(),
             active_agent_label: None,
             active_watch_count: None,
+            active_watch_command: None,
         };
 
         snapshot_footer_with_mode_indicator(
@@ -1803,6 +1823,7 @@ mod tests {
             key_hints: FooterKeyHints::default_bindings(),
             active_agent_label: None,
             active_watch_count: None,
+            active_watch_command: None,
         };
 
         snapshot_footer("footer_status_line_overrides_shortcuts", props);
@@ -1820,6 +1841,7 @@ mod tests {
             key_hints: FooterKeyHints::default_bindings(),
             active_agent_label: None,
             active_watch_count: None,
+            active_watch_command: None,
         };
 
         snapshot_footer("footer_status_line_yields_to_queue_hint", props);
@@ -1837,6 +1859,7 @@ mod tests {
             key_hints: FooterKeyHints::default_bindings(),
             active_agent_label: None,
             active_watch_count: None,
+            active_watch_command: None,
         };
 
         snapshot_footer("footer_status_line_overrides_draft_idle", props);
@@ -1854,6 +1877,7 @@ mod tests {
             key_hints: FooterKeyHints::default_bindings(),
             active_agent_label: None,
             active_watch_count: None,
+            active_watch_command: None,
         };
 
         snapshot_footer_with_mode_indicator_and_context(
@@ -1885,6 +1909,7 @@ mod tests {
             key_hints: FooterKeyHints::default_bindings(),
             active_agent_label: None,
             active_watch_count: None,
+            active_watch_command: None,
         };
 
         snapshot_footer_with_mode_indicator_and_context(
@@ -1908,6 +1933,7 @@ mod tests {
             key_hints: FooterKeyHints::default_bindings(),
             active_agent_label: None,
             active_watch_count: None,
+            active_watch_command: None,
         };
 
         // has status line and no collaboration mode
@@ -1934,6 +1960,7 @@ mod tests {
             key_hints: FooterKeyHints::default_bindings(),
             active_agent_label: None,
             active_watch_count: None,
+            active_watch_command: None,
         };
 
         snapshot_footer_with_mode_indicator_and_context(
@@ -1995,6 +2022,7 @@ mod tests {
             key_hints: FooterKeyHints::default_bindings(),
             active_agent_label: None,
             active_watch_count: None,
+            active_watch_command: None,
         };
 
         let screen = render_footer_with_mode_indicator_and_context(

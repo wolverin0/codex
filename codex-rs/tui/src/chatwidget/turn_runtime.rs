@@ -441,15 +441,40 @@ impl ChatWidget {
         if !self.warning_display_state.should_display(&message) {
             return;
         }
-        // Mirror watch-tool lifecycle into the footer `· N watch` chip — see
-        // chatwidget::parse_watch_count. The core-side watch tool emits
-        // `👁 watch [N] active|stopped: ... — M watch(es) running` Warnings on
-        // every register/stop; we treat that as the source of truth for chip
-        // visibility (no new EventMsg variant / app-server-protocol churn).
-        if message.contains("👁") && message.contains("watch(es) running")
-            && let Some(count) = crate::chatwidget::parse_watch_count(&message)
-        {
-            self.set_active_watch_count(Some(count));
+        // Mirror watch-tool lifecycle into the footer `· N watch` chip AND
+        // the TUI-side `core_watches_mirror` registry. The core-side watch
+        // tool emits lifecycle Warnings on register/stop; we parse them once
+        // here and update both the chip count and the per-watch map (so the
+        // `/watch` overlay can render `[id] command → instruction` without
+        // burning a model turn calling watch_list).
+        if let Some(event) = crate::chatwidget::parse_watch_lifecycle(&message) {
+            match event {
+                crate::chatwidget::WatchLifecycleEvent::Registered {
+                    id,
+                    command,
+                    instruction,
+                    count,
+                } => {
+                    self.core_watches_mirror.insert(id, (command, instruction));
+                    self.set_active_watch_count(Some(count));
+                }
+                crate::chatwidget::WatchLifecycleEvent::Stopped { id, count } => {
+                    self.core_watches_mirror.remove(&id);
+                    self.set_active_watch_count(Some(count));
+                }
+            }
+            // Refresh the inline single-watch command shown in the chip:
+            // expand to `· watch: <cmd>` when exactly one is active, clear
+            // otherwise (so the chip falls back to the count form).
+            let single_cmd = if self.core_watches_mirror.len() == 1 {
+                self.core_watches_mirror
+                    .values()
+                    .next()
+                    .map(|(cmd, _)| cmd.clone())
+            } else {
+                None
+            };
+            self.set_active_watch_command(single_cmd);
         }
         self.add_to_history(history_cell::new_warning_event(message));
         self.request_redraw();

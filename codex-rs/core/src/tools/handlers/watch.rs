@@ -143,8 +143,12 @@ impl ToolExecutor<ToolInvocation> for WatchHandler {
             .send_event_raw(Event {
                 id: String::new(),
                 msg: EventMsg::Warning(WarningEvent {
+                    // Include the instruction so the TUI mirror can show
+                    // *what the agent will do* when this watch fires — the
+                    // `→ <instruction>` segment is parsed by the TUI's
+                    // chatwidget::parse_watch_register_line helper.
                     message: format!(
-                        "👁 watch [{id}] active: `{command}` — {} watch(es) running",
+                        "👁 watch [{id}] active: `{command}` → {instruction} — {} watch(es) running",
                         session.watch_count()
                     ),
                 }),
