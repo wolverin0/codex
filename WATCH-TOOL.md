@@ -31,6 +31,21 @@ and a standing instruction so it can react on its own.
 
 ## Install
 
+### One-command (Linux x86_64 + WSL Ubuntu)
+
+```bash
+npm install -g @openai/codex@0.133.0   # if not already at this version
+curl -fsSL https://raw.githubusercontent.com/wolverin0/codex/feat/watch-monitor-0133/install.sh | bash
+```
+
+That installs official codex (we keep its npm shim + state DB), then
+downloads our pre-built patched binary from the
+[v0.133.0-watch.1 release](https://github.com/wolverin0/codex/releases/tag/v0.133.0-watch.1)
+and swaps it into the npm vendored slot. To revert: `cp` the
+`.orig-<timestamp>` backup the installer creates.
+
+### Build from source (Mac, Windows-native, other arches)
+
 This is **not** an alternative `npm install` — it's a Rust source
 fork. You install official codex first, then **replace its bundled
 binary** with one you built from this branch. The npm shim, version
