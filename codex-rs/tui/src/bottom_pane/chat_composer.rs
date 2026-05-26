@@ -506,6 +506,7 @@ impl ChatComposer {
                 status_line_enabled: false,
                 side_conversation_context_label: None,
                 active_agent_label: None,
+                active_watch_count: None,
                 external_editor_key: Some(key_hint::ctrl(KeyCode::Char('g'))),
                 show_transcript_key: Some(key_hint::ctrl(KeyCode::Char('t'))),
                 insert_newline_key: footer_insert_newline_key(
@@ -3576,6 +3577,7 @@ impl ChatComposer {
                 reasoning_up: self.footer.reasoning_up_key,
             },
             active_agent_label: self.footer.active_agent_label.clone(),
+            active_watch_count: self.footer.active_watch_count,
         }
     }
 
@@ -4213,6 +4215,18 @@ impl ChatComposer {
             return false;
         }
         self.footer.active_agent_label = active_agent_label;
+        true
+    }
+
+    /// Set the active core-side watch count chip. Returns true when the value
+    /// changed (caller can request a redraw). `None` and `Some(0)` are
+    /// equivalent and hide the chip.
+    pub(crate) fn set_active_watch_count(&mut self, count: Option<usize>) -> bool {
+        let normalized = count.filter(|n| *n > 0);
+        if self.footer.active_watch_count == normalized {
+            return false;
+        }
+        self.footer.active_watch_count = normalized;
         true
     }
 }

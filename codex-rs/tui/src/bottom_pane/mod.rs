@@ -1688,6 +1688,13 @@ impl BottomPane {
         }
     }
 
+    /// Update the `· N watch` chip shown next to the status line.
+    pub(crate) fn set_active_watch_count(&mut self, count: Option<usize>) {
+        if self.composer.set_active_watch_count(count) {
+            self.request_redraw();
+        }
+    }
+
     pub(crate) fn set_side_conversation_context_label(&mut self, label: Option<String>) {
         if self.composer.set_side_conversation_context_label(label) {
             self.request_redraw();

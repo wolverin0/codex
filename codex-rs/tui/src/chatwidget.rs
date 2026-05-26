@@ -1985,6 +1985,25 @@ const SIDE_PLACEHOLDERS: [&str; 3] = [
     "Will this algorithm scale well?",
 ];
 
+// Extract the trailing watch count from a watch-tool lifecycle Warning
+// message. Matches the pattern `— <N> watch(es) running` and returns N.
+// Called from `chatwidget::turn_runtime::on_warning` to drive the footer
+// `· N watch` chip.
+pub(crate) fn parse_watch_count(message: &str) -> Option<usize> {
+    let idx = message.rfind("watch(es) running")?;
+    let prefix = &message[..idx];
+    let digits: String = prefix
+        .chars()
+        .rev()
+        .skip_while(|c| c.is_whitespace())
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    if digits.is_empty() {
+        return None;
+    }
+    digits.chars().rev().collect::<String>().parse().ok()
+}
+
 // Extract the first bold (Markdown) element in the form **...** from `s`.
 // Returns the inner text if found; otherwise `None`.
 fn extract_first_bold(s: &str) -> Option<String> {

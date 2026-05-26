@@ -82,6 +82,12 @@ impl ChatWidget {
         self.bottom_pane.set_active_agent_label(active_agent_label);
     }
 
+    /// Update the `· N watch` chip rendered next to the status line. Driven by
+    /// parsing watch-tool lifecycle Warning messages in `add_warning_message`.
+    pub(crate) fn set_active_watch_count(&mut self, count: Option<usize>) {
+        self.bottom_pane.set_active_watch_count(count);
+    }
+
     /// Recomputes footer status-line content from config and current runtime state.
     ///
     /// This method is the status-line orchestrator: it parses configured item identifiers,

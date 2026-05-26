@@ -30,6 +30,10 @@ pub(super) struct FooterState {
     pub(super) status_line_enabled: bool,
     pub(super) side_conversation_context_label: Option<String>,
     pub(super) active_agent_label: Option<String>,
+    /// Number of active core-side watch tool registrations (the `watch` tool from
+    /// `codex-core::tools::handlers::watch`). When `Some(n)` and `n > 0`, the
+    /// footer renders a `· N watch` chip so the user knows watches are armed.
+    pub(super) active_watch_count: Option<usize>,
     pub(super) external_editor_key: Option<KeyBinding>,
     pub(super) show_transcript_key: Option<KeyBinding>,
     pub(super) insert_newline_key: Option<KeyBinding>,
