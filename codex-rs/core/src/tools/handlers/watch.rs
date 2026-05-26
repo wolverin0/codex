@@ -197,17 +197,26 @@ fn spawn_command_watch(
                     truncate_chars(&out, 200)
                 );
                 if consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
-                    let _ = session
-                        .send_event_raw(Event {
-                            id: String::new(),
-                            msg: EventMsg::Warning(WarningEvent {
-                                message: format!(
-                                    "👁 watch auto-stopped after {MAX_CONSECUTIVE_FAILURES} \
-                                     consecutive failures: `{command}`"
-                                ),
-                            }),
-                        })
-                        .await;
+                    // Emit the auto-stop notice through submit_self (a synthetic
+                    // user turn) instead of send_event_raw(Warning). Background
+                    // Warning events do NOT render in the TUI while the agent is
+                    // idle, but submit_self turns do (same path as reactions).
+                    let notice = format!(
+                        "[watch auto-stopped after {MAX_CONSECUTIVE_FAILURES} \
+                         consecutive failures: `{command}`] No further action \
+                         needed; this watch will no longer poll."
+                    );
+                    let op = Op::UserInput {
+                        items: vec![UserInput::Text {
+                            text: notice,
+                            text_elements: Vec::new(),
+                        }],
+                        environments: None,
+                        final_output_json_schema: None,
+                        responsesapi_client_metadata: None,
+                        thread_settings: ThreadSettingsOverrides::default(),
+                    };
+                    let _ = session.submit_self(op).await;
                     break;
                 }
                 continue;
